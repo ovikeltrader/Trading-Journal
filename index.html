@@ -544,8 +544,10 @@ async function deleteTradeFromCloud(dateKey){
 }
 
 async function saveConfig(){
+  if(!currentUser){showToast("⚠ No hay sesión activa");return;}
   const row={user_id:currentUser.id,initial_balance_mt5:initialBalanceMT5,apex_balance:apexCfg.balance,apex_dd:apexCfg.dd,apex_dll:apexCfg.dll,apex_cons:apexCfg.cons,updated_at:new Date().toISOString()};
-  await sb.from('user_config').upsert(row,{onConflict:'user_id'});
+  const{error}=await sb.from("user_config").upsert(row,{onConflict:"user_id"});
+  if(error){console.error("saveConfig error:",error);showToast("⚠ Error: "+error.message);}
 }
 
 async function saveApexCfg(){
@@ -869,19 +871,31 @@ function showImportPreview(byDay,source){
 
 async function confirmImport(){
   if(!pendingImport.length)return;
+  if(!currentUser){showToast('⚠ Tenés que iniciar sesión primero');return;}
   setSyncStatus('saving');
+  let saved=0,errors=0;
   for(const t of pendingImport){
     const ex=trades[t.date]||{};
     const td={...ex,pnl:t.profit,trades:t.count,fromImport:true,importSymbols:t.symbols,images:ex.images||[],notes:ex.notes||'',emotion:ex.emotion||'',setup:ex.setup||'',rr:ex.rr||'',winrate:ex.winrate||'',points:ex.points||''};
     trades[t.date]=td;
-    await saveTradeToCloud(t.date,td);
+    const row={
+      user_id:currentUser.id,date:t.date,broker:currentBroker,
+      pnl:td.pnl,trades_count:parseInt(td.trades)||0,points:parseFloat(td.points)||0,
+      winrate:parseFloat(td.winrate)||0,rr:parseFloat(td.rr)||0,symbol:td.importSymbols||'',
+      setup:'',emotion:'',notes:'',from_import:true,import_symbols:td.importSymbols||'',
+      images:[],updated_at:new Date().toISOString()
+    };
+    const{error}=await sb.from('trades').upsert(row,{onConflict:'user_id,date,broker'});
+    if(error){errors++;console.error('Error saving',t.date,error);}
+    else saved++;
   }
   const hist=JSON.parse(localStorage.getItem(`tj_imp_hist_${currentBroker}`)||'[]');
   hist.unshift({date:new Date().toISOString().split('T')[0],days:pendingImport.length,total:pendingImport.reduce((s,t)=>s+t.profit,0).toFixed(2)});
   localStorage.setItem(`tj_imp_hist_${currentBroker}`,JSON.stringify(hist.slice(0,10)));
   renderCalendar();renderWeekly();cancelImport();renderImportHistory();
   if(currentBroker==='apex')renderApexRules();
-  showToast(`✓ ${pendingImport.length} días importados y guardados`);
+  if(errors>0)showToast(`⚠ ${saved} guardados, ${errors} errores. Revisá consola.`);
+  else{setSyncStatus('ok');showToast(`✓ ${saved} días importados y guardados en la nube`);}
   pendingImport=[];
 }
 function cancelImport(){pendingImport=[];const w=document.getElementById('importPreviewWrap');if(w)w.style.display='none';}
@@ -1028,8 +1042,13 @@ function renderSettings(){
   }
 }
 async function saveMT5Balance(){
-  initialBalanceMT5=parseFloat(document.getElementById('balInput').value)||0;
-  await saveConfig();showToast('✓ BALANCE GUARDADO');
+  if(!currentUser){showToast("⚠ Iniciá sesión primero");return;}
+  const val=parseFloat(document.getElementById("balInput").value);
+  if(isNaN(val)){showToast("⚠ Ingresá un monto válido");return;}
+  initialBalanceMT5=val;
+  await saveConfig();
+  showToast("✓ BALANCE GUARDADO");
+}
 }
 
 function exportJSON(){dl(new Blob([JSON.stringify(trades,null,2)],{type:'application/json'}),`journal_${currentBroker}.json`);showToast('✓ JSON');}
