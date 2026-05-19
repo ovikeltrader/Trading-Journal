@@ -872,8 +872,7 @@ function parseMT5(html){
 }
 
 function parseTradovate(csv){
-  const lines=csv.trim().split('
-');if(lines.length<2){showToast('⚠ CSV vacío');return;}
+ const lines=csv.trim().split('\n');if(lines.length<2){showToast('⚠ CSV vacío');return;}
   const header=lines[0].split(',').map(h=>h.trim().replace(/"/g,'').toLowerCase());
   const fi=(...names)=>names.reduce((f,n)=>{if(f>=0)return f;return header.findIndex(h=>h.includes(n));},-1);
   const iDate=fi('date','time','timestamp'),iSymbol=fi('symbol','contract','instrument'),iPnl=fi('p&l','pnl','profit','gain','realized'),iQty=fi('qty','quantity','contracts');
