@@ -1049,7 +1049,6 @@ async function saveMT5Balance(){
   await saveConfig();
   showToast("✓ BALANCE GUARDADO");
 }
-}
 
 function exportJSON(){dl(new Blob([JSON.stringify(trades,null,2)],{type:'application/json'}),`journal_${currentBroker}.json`);showToast('✓ JSON');}
 function exportCSV(){
