@@ -53,6 +53,12 @@ html,body{height:100%;background:var(--bg1);color:var(--text1);font-family:'DM S
 
 /* ── TOP BAR ── */
 .topbar{display:flex;align-items:center;gap:12px;padding:10px 20px;background:var(--bg2);border-bottom:1px solid var(--border);flex-shrink:0;flex-wrap:wrap}
+.equity-block{display:flex;align-items:center;gap:12px;background:var(--bg3);border:1px solid var(--border);border-radius:9px;padding:8px 14px;flex:1;max-width:380px}
+.equity-label{font-size:9px;letter-spacing:2px;color:var(--text2);margin-bottom:2px;font-family:"Space Mono",monospace}
+.equity-value{font-size:19px;font-weight:700;font-family:"Space Mono",monospace;color:var(--gold)}
+.equity-sub{font-size:9px;color:var(--text2);margin-top:2px}
+.equity-edit-btn{background:transparent;border:1px solid var(--border);color:var(--text2);padding:3px 7px;border-radius:5px;cursor:pointer;font-family:"Space Mono",monospace;font-size:9px;letter-spacing:1px;transition:all 0.15s;white-space:nowrap}
+.equity-edit-btn:hover{border-color:var(--gold);color:var(--gold)}
 .topbar-logo{font-family:'Space Mono',monospace;font-size:13px;letter-spacing:3px;color:var(--green);white-space:nowrap}
 .topbar-logo span{color:var(--text3)}
 .broker-switch{display:flex;gap:3px;background:var(--bg3);padding:3px;border-radius:8px;border:1px solid var(--border)}
@@ -262,6 +268,14 @@ select.fi option{background:var(--bg3)}
       <button class="broker-btn mt5 active" onclick="setBroker('mt5',this)">MT5</button>
       <button class="broker-btn apex" onclick="setBroker('apex',this)">APEX</button>
     </div>
+    <div class="equity-block">
+      <div style="flex:1">
+        <div class="equity-label">PATRIMONIO ACTUAL</div>
+        <div class="equity-value" id="equityValue" onclick="openEquityModal()" style="cursor:pointer">— configurar</div>
+        <div class="equity-sub" id="equitySub">Balance inicial + P&amp;L acumulado</div>
+      </div>
+      <button class="equity-edit-btn" onclick="openEquityModal()">&#9998; EDITAR</button>
+    </div>
     <div class="topbar-right">
       <span class="sync-indicator sync-ok" id="syncInd">● SYNC</span>
       <span class="user-pill" id="userPill">—</span>
@@ -424,6 +438,26 @@ select.fi option{background:var(--bg3)}
   </div>
 </div>
 
+<div class="overlay" id="equityModal">
+  <div style="background:var(--bg2);border:1px solid var(--gold);border-radius:12px;padding:22px;width:100%;max-width:380px">
+    <div style="font-size:13px;font-weight:700;letter-spacing:2px;margin-bottom:16px;font-family:'Space Mono',monospace;color:var(--gold)">PATRIMONIO — BALANCE INICIAL</div>
+    <div class="fg" style="margin-bottom:14px">
+      <label class="form-label">BALANCE INICIAL ($)</label>
+      <input type="number" class="fi" id="eqInput" placeholder="ej: 610.94" step="0.01">
+      <div style="font-size:10px;color:var(--text2);margin-top:6px;line-height:1.5">Ingresá el balance antes de los trades registrados. El patrimonio se calcula sumando el P&amp;L acumulado.</div>
+    </div>
+    <div id="eqPreview" style="background:var(--bg3);border-radius:7px;padding:10px;margin-bottom:12px;font-size:11px;display:none">
+      <div style="display:flex;justify-content:space-between;margin-bottom:5px"><span style="color:var(--text2)">Balance inicial</span><span id="ep1" style="color:var(--gold)"></span></div>
+      <div style="display:flex;justify-content:space-between;margin-bottom:5px"><span style="color:var(--text2)">P&amp;L acumulado</span><span id="ep2"></span></div>
+      <div style="border-top:1px solid var(--border);margin:6px 0"></div>
+      <div style="display:flex;justify-content:space-between"><span style="color:var(--text1);font-weight:700">PATRIMONIO</span><span id="ep3" style="color:var(--gold);font-weight:700;font-size:13px"></span></div>
+    </div>
+    <div style="display:flex;gap:8px">
+      <button class="btn" style="flex:1;border-color:var(--gold);color:var(--gold)" onclick="saveEquity()">GUARDAR</button>
+      <button class="btn" onclick="document.getElementById('equityModal').classList.remove('open')">CANCELAR</button>
+    </div>
+  </div>
+</div>
 <div class="lightbox" id="lightbox" onclick="closeLightbox()"><img id="lbImg" src="" alt=""></div>
 <div class="toast" id="toast"></div>
 
@@ -519,16 +553,17 @@ async function loadTrades(){
 }
 
 async function loadConfig(){
-  const{data}=await sb.from('user_config').select('*').eq('user_id',currentUser.id).single();
+  const{data}=await sb.from("user_config").select("*").eq("user_id",currentUser.id).single();
   if(data){
     initialBalanceMT5=data.initial_balance_mt5||0;
+    initialBalance=data.initial_balance_mt5>0?data.initial_balance_mt5:null;
     apexCfg={balance:data.apex_balance||50000,dd:data.apex_dd||1500,dll:data.apex_dll||1000,cons:data.apex_cons||50};
   }
-  // populate apex cfg inputs
-  document.getElementById('cfgBal').value=apexCfg.balance;
-  document.getElementById('cfgDD').value=apexCfg.dd;
-  document.getElementById('cfgDLL').value=apexCfg.dll;
-  document.getElementById('cfgCons').value=apexCfg.cons;
+  document.getElementById("cfgBal").value=apexCfg.balance;
+  document.getElementById("cfgDD").value=apexCfg.dd;
+  document.getElementById("cfgDLL").value=apexCfg.dll;
+  document.getElementById("cfgCons").value=apexCfg.cons;
+  renderEquity();
 }
 
 async function saveTradeToCloud(dateKey,tradeData){
@@ -555,7 +590,7 @@ async function deleteTradeFromCloud(dateKey){
 
 async function saveConfig(){
   if(!currentUser){showToast("⚠ No hay sesión activa");return;}
-  const row={user_id:currentUser.id,initial_balance_mt5:initialBalanceMT5,apex_balance:apexCfg.balance,apex_dd:apexCfg.dd,apex_dll:apexCfg.dll,apex_cons:apexCfg.cons,updated_at:new Date().toISOString()};
+  const row={user_id:currentUser.id,initial_balance_mt5:initialBalance!==null?initialBalance:initialBalanceMT5,apex_balance:apexCfg.balance,apex_dd:apexCfg.dd,apex_dll:apexCfg.dll,apex_cons:apexCfg.cons,updated_at:new Date().toISOString()};
   const{error}=await sb.from("user_config").upsert(row,{onConflict:"user_id"});
   if(error){console.error("saveConfig error:",error);showToast("⚠ Error: "+error.message);}
 }
@@ -625,6 +660,7 @@ function renderUI(){
   renderCalendar();
   renderWeekly();
   if(currentBroker==='apex')renderApexRules();
+  renderEquity();
 }
 
 function fmt(n){return'$'+Math.abs(n).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});}
@@ -1074,6 +1110,46 @@ async function clearBrokerData(){
 function dl(blob,name){const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=name;a.click();URL.revokeObjectURL(a.href);}
 function showToast(msg){const t=document.getElementById('toast');t.textContent=msg;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),2500);}
 
+// ── EQUITY ──\
+let initialBalance=null;\
+function calcTotalPnL(){return Object.values(trades).reduce((s,v)=>s+parseFloat(v.pnl||0),0);}\
+function renderEquity(){\
+  const ev=document.getElementById('equityValue'),es=document.getElementById('equitySub');\
+  if(!ev)return;\
+  if(initialBalance===null){ev.textContent='— configurar';ev.style.color='var(--text2)';es.textContent='Click para configurar balance inicial';return;}\
+  const tot=calcTotalPnL(),eq=initialBalance+tot;\
+  ev.textContent='$'+eq.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});\
+  ev.style.color=eq>=initialBalance?'var(--gold)':'var(--red)';\
+  const diff=eq-initialBalance,pct=initialBalance>0?((diff/initialBalance)*100).toFixed(1):0;\
+  es.innerHTML='Balance: $'+initialBalance.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})+' · P\&L: <span style="color:'+(diff>=0?'var(--green)':'var(--red)')+'">'+(diff>=0?'+':'')+'$'+Math.abs(diff).toFixed(2)+' ('+(diff>=0?'+':'')+pct+'%)</span>';\
+}\
+function openEquityModal(){\
+  const inp=document.getElementById('eqInput');\
+  if(initialBalance!==null)inp.value=initialBalance;\
+  updateEqPreview();\
+  document.getElementById('equityModal').classList.add('open');\
+}\
+function updateEqPreview(){\
+  const val=parseFloat(document.getElementById('eqInput').value);\
+  const prev=document.getElementById('eqPreview');\
+  if(isNaN(val)){prev.style.display='none';return;}\
+  const tot=calcTotalPnL(),eq=val+tot;\
+  prev.style.display='block';\
+  document.getElementById('ep1').textContent='$'+val.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});\
+  const ep2=document.getElementById('ep2');ep2.textContent=(tot>=0?'+':'')+'$'+tot.toFixed(2);ep2.style.color=tot>=0?'var(--green)':'var(--red)';\
+  document.getElementById('ep3').textContent='$'+eq.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});\
+}\
+async function saveEquity(){\
+  const val=parseFloat(document.getElementById('eqInput').value);\
+  if(isNaN(val)){showToast('⚠ Ingresá un monto válido');return;}\
+  initialBalance=val;\
+  await saveConfig();\
+  renderEquity();\
+  document.getElementById('equityModal').classList.remove('open');\
+  showToast('✓ BALANCE GUARDADO');\
+}\
+document.getElementById('equityModal').addEventListener('click',function(e){if(e.target===this)this.classList.remove('open');});\
+document.getElementById('eqInput') \&\& document.getElementById('eqInput').addEventListener('input',updateEqPreview);
 document.getElementById('tradeModal').addEventListener('click',function(e){if(e.target===this)closeModal();});
 document.addEventListener('keydown',e=>{if(e.key==='Escape'){closeModal();closeLightbox();}});
 </script>
