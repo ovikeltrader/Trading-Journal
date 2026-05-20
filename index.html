@@ -556,7 +556,8 @@ async function loadConfig(){
   const{data}=await sb.from("user_config").select("*").eq("user_id",currentUser.id).single();
   if(data){
     initialBalanceMT5=data.initial_balance_mt5||0;
-    initialBalance=data.initial_balance_mt5>0?data.initial_balance_mt5:null;
+    initialBalances.mt5=data.initial_balance_mt5>0?data.initial_balance_mt5:null;
+    initialBalances.apex=data.apex_balance>0?data.apex_balance:null;
     apexCfg={balance:data.apex_balance||50000,dd:data.apex_dd||1500,dll:data.apex_dll||1000,cons:data.apex_cons||50};
   }
   document.getElementById("cfgBal").value=apexCfg.balance;
@@ -590,7 +591,7 @@ async function deleteTradeFromCloud(dateKey){
 
 async function saveConfig(){
   if(!currentUser){showToast("⚠ No hay sesión activa");return;}
-  const row={user_id:currentUser.id,initial_balance_mt5:initialBalance!==null?initialBalance:initialBalanceMT5,apex_balance:apexCfg.balance,apex_dd:apexCfg.dd,apex_dll:apexCfg.dll,apex_cons:apexCfg.cons,updated_at:new Date().toISOString()};
+  const row={user_id:currentUser.id,initial_balance_mt5:initialBalances.mt5!==null?initialBalances.mt5:initialBalanceMT5,apex_balance:apexCfg.balance,apex_dd:apexCfg.dd,apex_dll:apexCfg.dll,apex_cons:apexCfg.cons,updated_at:new Date().toISOString()};
   const{error}=await sb.from("user_config").upsert(row,{onConflict:"user_id"});
   if(error){console.error("saveConfig error:",error);showToast("⚠ Error: "+error.message);}
 }
@@ -1111,21 +1112,24 @@ function dl(blob,name){const a=document.createElement('a');a.href=URL.createObje
 function showToast(msg){const t=document.getElementById('toast');t.textContent=msg;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),2500);}
 
 // ── EQUITY ──
-let initialBalance=null;
+let initialBalances={mt5:null,apex:null};
+function getInitialBalance(){return initialBalances[currentBroker];}
+function setInitialBalance(v){initialBalances[currentBroker]=v;}
+
 function calcTotalPnL(){return Object.values(trades).reduce((s,v)=>s+parseFloat(v.pnl||0),0);}
 function renderEquity(){
   const ev=document.getElementById('equityValue'),es=document.getElementById('equitySub');
   if(!ev)return;
-  if(initialBalance===null){ev.textContent='— configurar';ev.style.color='var(--text2)';es.textContent='Click para configurar balance inicial';return;}
-  const tot=calcTotalPnL(),eq=initialBalance+tot;
+  if(getInitialBalance()===null){ev.textContent='— configurar';ev.style.color='var(--text2)';es.textContent='Click para configurar balance inicial';return;}
+  const tot=calcTotalPnL(),eq=getInitialBalance()+tot;
   ev.textContent='$'+eq.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
-  ev.style.color=eq>=initialBalance?'var(--gold)':'var(--red)';
-  const diff=eq-initialBalance,pct=initialBalance>0?((diff/initialBalance)*100).toFixed(1):0;
-  es.innerHTML='Balance: $'+initialBalance.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})+' · P&L: <span style="color:'+(diff>=0?'var(--green)':'var(--red)')+'">'+(diff>=0?'+':'')+'$'+Math.abs(diff).toFixed(2)+' ('+(diff>=0?'+':'')+pct+'%)</span>';
+  ev.style.color=eq>=getInitialBalance()?'var(--gold)':'var(--red)';
+  const diff=eq-getInitialBalance(),pct=getInitialBalance()>0?((diff/getInitialBalance())*100).toFixed(1):0;
+  es.innerHTML='Balance: $'+getInitialBalance().toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})+' · P&L: <span style="color:'+(diff>=0?'var(--green)':'var(--red)')+'">'+(diff>=0?'+':'')+'$'+Math.abs(diff).toFixed(2)+' ('+(diff>=0?'+':'')+pct+'%)</span>';
 }
 function openEquityModal(){
   const inp=document.getElementById('eqInput');
-  if(initialBalance!==null)inp.value=initialBalance;
+  if(getInitialBalance()!==null)inp.value=getInitialBalance();
   updateEqPreview();
   document.getElementById('equityModal').classList.add('open');
 }
@@ -1142,7 +1146,9 @@ function updateEqPreview(){
 async function saveEquity(){
   const val=parseFloat(document.getElementById('eqInput').value);
   if(isNaN(val)){showToast('⚠ Ingresá un monto válido');return;}
-  initialBalance=val;
+  setInitialBalance(val);
+  if(currentBroker==='mt5'){initialBalanceMT5=val;}
+  else{apexCfg.balance=val;}
   await saveConfig();
   renderEquity();
   document.getElementById('equityModal').classList.remove('open');
