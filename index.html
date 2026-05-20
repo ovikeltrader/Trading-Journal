@@ -872,7 +872,7 @@ function parseMT5(html){
 }
 
 function parseTradovate(csv){
- const lines=csv.trim().split('\n');if(lines.length<2){showToast('⚠ CSV vacío');return;}
+  const lines=csv.trim().split('\n');if(lines.length<2){showToast('⚠ CSV vacío');return;}
   const header=lines[0].split(',').map(h=>h.trim().replace(/"/g,'').toLowerCase());
   const fi=(...names)=>names.reduce((f,n)=>{if(f>=0)return f;return header.findIndex(h=>h.includes(n));},-1);
   const iDate=fi('date','time','timestamp'),iSymbol=fi('symbol','contract','instrument'),iPnl=fi('p&l','pnl','profit','gain','realized'),iQty=fi('qty','quantity','contracts');
@@ -1100,8 +1100,7 @@ function exportJSON(){dl(new Blob([JSON.stringify(trades,null,2)],{type:'applica
 function exportCSV(){
   const h='date,pnl,trades,points,winrate,rr,symbol,setup,emotion,notes';
   const rows=Object.entries(trades).sort(([a],[b])=>a.localeCompare(b)).map(([k,v])=>`${k},${v.pnl||''},${v.trades||''},${v.points||''},${v.winrate||''},${v.rr||''},"${v.symbol||''}","${v.setup||''}","${v.emotion||''}","${(v.notes||'').replace(/"/g,'""')}"`);
-  dl(new Blob([[h,...rows].join('
-')],{type:'text/csv'}),`journal_${currentBroker}.csv`);showToast('✓ CSV');
+  dl(new Blob([[h,...rows].join('\n')],{type:'text/csv'}),`journal_${currentBroker}.csv`);showToast('✓ CSV');
 }
 async function clearBrokerData(){
   if(!confirm(`¿Eliminar TODOS los datos de ${currentBroker.toUpperCase()}? Esto no se puede deshacer.`))return;
