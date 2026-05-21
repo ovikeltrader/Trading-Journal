@@ -527,7 +527,10 @@ async function doLogout(){
 }
 
 // ── SESSION ──
+let dataLoaded=false;
+let loadingInProgress=false;
 sb.auth.onAuthStateChange(async(event,session)=>{
+  console.log('Auth event:',event,session?.user?.email);
   if(session?.user){
     currentUser=session.user;
     document.getElementById("authWrap").style.display="none";
@@ -535,11 +538,27 @@ sb.auth.onAuthStateChange(async(event,session)=>{
     document.getElementById("userPill").textContent=currentUser.email;
     const now=new Date();curYear=now.getFullYear();curMonth=now.getMonth();
     populateYearSel();
-    // Show UI immediately, load data in background
     renderUI();
-    await loadConfig();
-    await loadTrades();
-    renderUI();
+    if(!loadingInProgress){
+      loadingInProgress=true;
+      try{
+        await loadConfig();
+        await loadTrades();
+        renderUI();
+        dataLoaded=true;
+      }catch(e){
+        console.error('Data load error:',e);
+        showToast('⚠ Error cargando datos. Recargá.');
+      }finally{
+        loadingInProgress=false;
+      }
+    }
+  }else{
+    currentUser=null;
+    dataLoaded=false;
+    loadingInProgress=false;
+    document.getElementById("authWrap").style.display="flex";
+    document.getElementById("appWrap").classList.remove("visible");
   }
 });
 
