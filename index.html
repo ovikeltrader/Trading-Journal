@@ -519,10 +519,42 @@ async function doLogout(){
 // ── SESSION ──
 let dataLoaded=false;
 let loadingInProgress=false;
+
+async function initData(){
+  if(loadingInProgress||dataLoaded)return;
+  loadingInProgress=true;
+  try{
+    // Test connection first with a 5s timeout
+    const test=await Promise.race([
+      sb.from('trades').select('id').limit(1),
+      new Promise((_,rej)=>setTimeout(()=>rej(new Error('timeout')),5000))
+    ]);
+    if(test.error){throw test.error;}
+    await loadConfig();
+    await loadTrades();
+    renderUI();
+    dataLoaded=true;
+  }catch(e){
+    console.error('initData error:',e);
+    // If timeout, session is probably stale - force re-login
+    if(e.message==='timeout'){
+      console.log('Session stale, clearing...');
+      await sb.auth.signOut().catch(()=>{});
+      localStorage.removeItem('sb-fduslogihpuykumwfmtk-auth-token');
+      currentUser=null;dataLoaded=false;loadingInProgress=false;
+      document.getElementById("authWrap").style.display="flex";
+      document.getElementById("appWrap").classList.remove("visible");
+      showToast('Sesión expirada. Ingresá de nuevo.');
+      return;
+    }
+    showToast('⚠ Error cargando datos.');
+  }finally{
+    loadingInProgress=false;
+  }
+}
+
 sb.auth.onAuthStateChange(async(event,session)=>{
   console.log('Auth event:',event,session?.user?.email);
-  if(event==='TOKEN_REFRESHED'&&dataLoaded)return;
-  if(event==='SIGNED_IN'&&dataLoaded&&loadingInProgress)return;
   if(session?.user){
     currentUser=session.user;
     document.getElementById("authWrap").style.display="none";
@@ -531,19 +563,8 @@ sb.auth.onAuthStateChange(async(event,session)=>{
     const now=new Date();curYear=now.getFullYear();curMonth=now.getMonth();
     populateYearSel();
     renderUI();
-    if(!loadingInProgress&&!dataLoaded){
-      loadingInProgress=true;
-      try{
-        await loadConfig();
-        await loadTrades();
-        renderUI();
-        dataLoaded=true;
-      }catch(e){
-        console.error('Data load error:',e);
-        showToast('⚠ Error cargando. Recargá la página.');
-      }finally{
-        loadingInProgress=false;
-      }
+    if(event==='SIGNED_IN'||event==='INITIAL_SESSION'){
+      initData();
     }
   }else{
     currentUser=null;dataLoaded=false;loadingInProgress=false;
