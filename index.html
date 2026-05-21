@@ -470,7 +470,7 @@ select.fi option{background:var(--bg3)}
 <script>
 const SUPABASE_URL='https://fduslogihpuykumwfmtk.supabase.co';
 const SUPABASE_KEY='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZkdXNsb2dpaHB1eWt1bXdmbXRrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzkxOTk4ODYsImV4cCI6MjA5NDc3NTg4Nn0.QC-RiCw1orVjik46-7vy-Om3mMK0GGg1SLr0atGbL7I';
-const sb=supabase.createClient(SUPABASE_URL,SUPABASE_KEY);
+const sb=supabase.createClient(SUPABASE_URL,SUPABASE_KEY,{auth:{autoRefreshToken:true,persistSession:true,detectSessionInUrl:false},global:{fetch:(...args)=>fetch(...args)}});
 
 let currentUser=null, currentBroker='mt5';
 let trades={}, curYear, curMonth, pendingImgs=[], pendingImport=[];
@@ -521,6 +521,8 @@ let dataLoaded=false;
 let loadingInProgress=false;
 sb.auth.onAuthStateChange(async(event,session)=>{
   console.log('Auth event:',event,session?.user?.email);
+  if(event==='TOKEN_REFRESHED'&&dataLoaded)return;
+  if(event==='SIGNED_IN'&&dataLoaded&&loadingInProgress)return;
   if(session?.user){
     currentUser=session.user;
     document.getElementById("authWrap").style.display="none";
@@ -529,7 +531,7 @@ sb.auth.onAuthStateChange(async(event,session)=>{
     const now=new Date();curYear=now.getFullYear();curMonth=now.getMonth();
     populateYearSel();
     renderUI();
-    if(!loadingInProgress){
+    if(!loadingInProgress&&!dataLoaded){
       loadingInProgress=true;
       try{
         await loadConfig();
@@ -538,15 +540,13 @@ sb.auth.onAuthStateChange(async(event,session)=>{
         dataLoaded=true;
       }catch(e){
         console.error('Data load error:',e);
-        showToast('⚠ Error cargando datos. Recargá.');
+        showToast('⚠ Error cargando. Recargá la página.');
       }finally{
         loadingInProgress=false;
       }
     }
   }else{
-    currentUser=null;
-    dataLoaded=false;
-    loadingInProgress=false;
+    currentUser=null;dataLoaded=false;loadingInProgress=false;
     document.getElementById("authWrap").style.display="flex";
     document.getElementById("appWrap").classList.remove("visible");
   }
