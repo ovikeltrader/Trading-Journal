@@ -510,8 +510,8 @@ async function doRegister(){
   else showAuthOk('¡Cuenta creada! Revisá tu email para confirmar.');
 }
 async function doLogout(){
-  await sb.auth.signOut();
-  currentUser=null;trades={};
+  try{await sb.auth.signOut();}catch(e){console.error('Logout error:',e);}
+  currentUser=null;trades={};dataLoaded=false;loadingInProgress=false;
   document.getElementById('authWrap').style.display='flex';
   document.getElementById('appWrap').classList.remove('visible');
 }
