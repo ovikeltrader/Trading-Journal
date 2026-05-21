@@ -544,15 +544,19 @@ sb.auth.onAuthStateChange(async(event,session)=>{
 });
 
 // ── SUPABASE DATA ──
-async function loadTrades(){
+async function loadTrades(retries){
+  if(retries===undefined)retries=3;
   setSyncStatus("saving");
   try{
-    const timeout=new Promise((_,reject)=>setTimeout(()=>reject(new Error("timeout")),10000));
+    const timeout=new Promise((_,reject)=>setTimeout(()=>reject(new Error("timeout")),15000));
     const query=sb.from("trades").select("*").eq("user_id",currentUser.id).eq("broker",currentBroker);
     const{data,error}=await Promise.race([query,timeout]);
-    if(error){setSyncStatus("err");showToast("⚠ Error cargando datos");return;}
+    if(error){
+      if(retries>0){setSyncStatus("saving");await new Promise(r=>setTimeout(r,2000));return loadTrades(retries-1);}
+      setSyncStatus("err");showToast("⚠ Error cargando datos");return;
+    }
     trades={};
-    data.forEach(row=>{
+    (data||[]).forEach(row=>{
       trades[row.date]={
         pnl:parseFloat(row.pnl),trades:row.trades_count,points:row.points,winrate:row.winrate,
         rr:row.rr,symbol:row.symbol,setup:row.setup,emotion:row.emotion,notes:row.notes,
@@ -563,13 +567,18 @@ async function loadTrades(){
     setSyncStatus("ok");
     renderUI();
   }catch(e){
+    if(retries>0){await new Promise(r=>setTimeout(r,2000));return loadTrades(retries-1);}
     setSyncStatus("err");
-    showToast("⚠ Timeout cargando datos. Recargá la página.");
+    showToast("⚠ Error de conexión. Recargá la página.");
   }
 }
 
 async function loadConfig(){
-  const{data}=await sb.from("user_config").select("*").eq("user_id",currentUser.id).single();
+  let data=null;
+  try{
+    const res=await sb.from("user_config").select("*").eq("user_id",currentUser.id).single();
+    data=res.data;
+  }catch(e){console.error("loadConfig error",e);}
   if(data){
     initialBalanceMT5=data.initial_balance_mt5||0;
     initialBalances.mt5=data.initial_balance_mt5>0?data.initial_balance_mt5:null;
