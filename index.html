@@ -477,7 +477,9 @@ let trades={}, curYear, curMonth, pendingImgs=[], pendingImport=[];
 let apexCfg={balance:50000,dd:1500,dll:1000,cons:50};
 let initialBalanceMT5=0;
 let equityCI,pnlCI,pieCI;
-let syncTimeout=null;
+// true solo si la config del usuario se leyó bien de la nube. Sin esto no se guarda:
+// evita commitear los defaults en memoria sobre valores reales de la DB.
+let configLoaded=false;
 
 // ── AUTH ──
 function switchAuthTab(tab,el){
@@ -548,6 +550,7 @@ async function initData(){
       return;
     }
     showToast('⚠ Error cargando datos.');
+    renderUI();  // que no quede colgado en CARGANDO...
   }finally{
     loadingInProgress=false;
   }
@@ -562,7 +565,7 @@ sb.auth.onAuthStateChange(async(event,session)=>{
     document.getElementById("userPill").textContent=currentUser.email;
     const now=new Date();curYear=now.getFullYear();curMonth=now.getMonth();
     populateYearSel();
-    renderUI();
+    if(dataLoaded)renderUI();else showLoading();
     if(event==='SIGNED_IN'||event==='INITIAL_SESSION'){
       initData();
     }
@@ -576,14 +579,17 @@ sb.auth.onAuthStateChange(async(event,session)=>{
 // ── SUPABASE DATA ──
 async function loadTrades(retries){
   if(retries===undefined)retries=3;
-  setSyncStatus("saving");
+  setSyncStatus("loading");
+  const brokerAtRequest=currentBroker;
   try{
     const timeout=new Promise((_,reject)=>setTimeout(()=>reject(new Error("timeout")),15000));
-    const query=sb.from("trades").select("*").eq("user_id",currentUser.id).eq("broker",currentBroker);
+    const query=sb.from("trades").select("*").eq("user_id",currentUser.id).eq("broker",brokerAtRequest);
     const{data,error}=await Promise.race([query,timeout]);
+    // Respuesta vieja: el usuario ya cambió de cuenta y hay otra carga en curso
+    if(brokerAtRequest!==currentBroker)return;
     if(error){
-      if(retries>0){setSyncStatus("saving");await new Promise(r=>setTimeout(r,2000));return loadTrades(retries-1);}
-      setSyncStatus("err");showToast("⚠ Error cargando datos");return;
+      if(retries>0){await new Promise(r=>setTimeout(r,2000));return loadTrades(retries-1);}
+      trades={};setSyncStatus("err");showToast("⚠ Error cargando datos");renderUI();return;
     }
     trades={};
     (data||[]).forEach(row=>{
@@ -597,17 +603,23 @@ async function loadTrades(retries){
     setSyncStatus("ok");
     renderUI();
   }catch(e){
+    if(brokerAtRequest!==currentBroker)return;
     if(retries>0){await new Promise(r=>setTimeout(r,2000));return loadTrades(retries-1);}
-    setSyncStatus("err");
+    trades={};setSyncStatus("err");
     showToast("⚠ Error de conexión. Recargá la página.");
+    renderUI();
   }
 }
 
 async function loadConfig(){
   let data=null;
+  configLoaded=false;
   try{
-    const res=await sb.from("user_config").select("*").eq("user_id",currentUser.id).single();
+    // maybeSingle: un usuario sin fila de config es un caso normal, no un error
+    const res=await sb.from("user_config").select("*").eq("user_id",currentUser.id).maybeSingle();
+    if(res.error)throw res.error;
     data=res.data;
+    configLoaded=true;
   }catch(e){console.error("loadConfig error",e);}
   if(data){
     initialBalanceMT5=data.initial_balance_mt5||0;
@@ -644,15 +656,29 @@ async function deleteTradeFromCloud(dateKey){
   setSyncStatus('ok');
 }
 
+// Escribe SOLO las columnas de la cuenta activa. El upsert parcial preserva las
+// columnas del otro broker tal como están en la DB, en vez de pisarlas con memoria.
 async function saveConfig(){
   if(!currentUser){showToast("⚠ No hay sesión activa");return;}
-  const row={user_id:currentUser.id,initial_balance_mt5:initialBalances.mt5!==null?initialBalances.mt5:initialBalanceMT5,apex_balance:apexCfg.balance,apex_dd:apexCfg.dd,apex_dll:apexCfg.dll,apex_cons:apexCfg.cons,updated_at:new Date().toISOString()};
+  if(!configLoaded){showToast("⚠ Config no cargada — recargá la página antes de guardar");return;}
+  setSyncStatus('saving');
+  const row={user_id:currentUser.id,updated_at:new Date().toISOString()};
+  if(currentBroker==='apex'){
+    row.apex_balance=apexCfg.balance;
+    row.apex_dd=apexCfg.dd;
+    row.apex_dll=apexCfg.dll;
+    row.apex_cons=apexCfg.cons;
+  }else{
+    row.initial_balance_mt5=initialBalances.mt5!==null?initialBalances.mt5:initialBalanceMT5;
+  }
   const{error}=await sb.from("user_config").upsert(row,{onConflict:"user_id"});
-  if(error){console.error("saveConfig error:",error);showToast("⚠ Error: "+error.message);}
+  if(error){setSyncStatus('err');console.error("saveConfig error:",error);showToast("⚠ Error: "+error.message);}
+  else setSyncStatus('ok');
 }
 
 async function saveApexCfg(){
   apexCfg={balance:parseFloat(document.getElementById('cfgBal').value)||50000,dd:parseFloat(document.getElementById('cfgDD').value)||1500,dll:parseFloat(document.getElementById('cfgDLL').value)||1000,cons:parseFloat(document.getElementById('cfgCons').value)||50};
+  initialBalances.apex=apexCfg.balance;
   await saveConfig();renderUI();showToast('✓ CONFIGURACIÓN GUARDADA');
 }
 
@@ -661,16 +687,27 @@ function setSyncStatus(s){
   el.className='sync-indicator';
   if(s==='ok'){el.classList.add('sync-ok');el.textContent='● SYNC';}
   else if(s==='saving'){el.classList.add('sync-saving');el.textContent='↑ GUARDANDO';}
+  else if(s==='loading'){el.classList.add('sync-saving');el.textContent='↓ CARGANDO';}
   else{el.classList.add('sync-err');el.textContent='✕ ERROR';}
+}
+
+// Estado de carga: oculta métricas y paneles para que nunca se vea la data de la cuenta anterior
+function showLoading(){
+  document.getElementById('loadingMsg').style.display='block';
+  document.getElementById('metricsWrap').style.display='none';
+  document.getElementById('tabsAndPanels').style.display='none';
+  document.getElementById('apexRulesWrap').style.display='none';
 }
 
 // ── BROKER SWITCH ──
 async function setBroker(b,el){
+  if(b===currentBroker)return;
   currentBroker=b;
   document.querySelectorAll('.broker-btn').forEach(btn=>btn.classList.remove('active'));
   el.classList.add('active');
-  await loadTrades();
-  renderUI();
+  trades={};      // el P&L se deriva de acá: sin limpiar, APEX mostraría el de MT5
+  showLoading();
+  await loadTrades();  // renderUI() se dispara adentro, ya con la data de la cuenta correcta
 }
 
 // ── TABS ──
@@ -991,9 +1028,9 @@ async function confirmImport(){
     if(error){errors++;console.error('Error saving',t.date,error);}
     else saved++;
   }
-  const hist=JSON.parse(localStorage.getItem(`tj_imp_hist_${currentBroker}`)||'[]');
+  const hist=JSON.parse(localStorage.getItem(impHistKey())||'[]');
   hist.unshift({date:new Date().toISOString().split('T')[0],days:pendingImport.length,total:pendingImport.reduce((s,t)=>s+t.profit,0).toFixed(2)});
-  localStorage.setItem(`tj_imp_hist_${currentBroker}`,JSON.stringify(hist.slice(0,10)));
+  localStorage.setItem(impHistKey(),JSON.stringify(hist.slice(0,10)));
   renderCalendar();renderWeekly();cancelImport();renderImportHistory();
   if(currentBroker==='apex')renderApexRules();
   if(errors>0)showToast(`⚠ ${saved} guardados, ${errors} errores. Revisá consola.`);
@@ -1001,8 +1038,10 @@ async function confirmImport(){
   pendingImport=[];
 }
 function cancelImport(){pendingImport=[];const w=document.getElementById('importPreviewWrap');if(w)w.style.display='none';}
+// Caché local scopeada por usuario + cuenta: dos cuentas en el mismo navegador no se mezclan
+function impHistKey(){return `tj_imp_hist_${currentUser?currentUser.id:'anon'}_${currentBroker}`;}
 function renderImportHistory(){
-  const hist=JSON.parse(localStorage.getItem(`tj_imp_hist_${currentBroker}`)||'[]');
+  const hist=JSON.parse(localStorage.getItem(impHistKey())||'[]');
   const el=document.getElementById('importHistory');if(!el)return;
   if(!hist.length){el.innerHTML='<div class="empty-state" style="padding:14px">Sin importaciones previas</div>';return;}
   el.innerHTML=hist.map(h=>`<div class="stat-row"><span class="stat-label">${h.date}</span><span><span class="badge ${currentBroker==='apex'?'badge-apex':'badge-mt5'}">${h.days} días</span> &nbsp;<span class="${parseFloat(h.total)>=0?'green':'red'}">${parseFloat(h.total)>=0?'+':''}${fmt(parseFloat(h.total))}</span></span></div>`).join('');
@@ -1148,7 +1187,9 @@ async function saveMT5Balance(){
   const val=parseFloat(document.getElementById("balInput").value);
   if(isNaN(val)){showToast("⚠ Ingresá un monto válido");return;}
   initialBalanceMT5=val;
+  initialBalances.mt5=val;
   await saveConfig();
+  renderEquity();
   showToast("✓ BALANCE GUARDADO");
 }
 
