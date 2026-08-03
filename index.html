@@ -80,6 +80,7 @@ html,body{height:100%;background:var(--bg1);color:var(--text1);font-family:'DM S
 .sync-ok{color:var(--green);background:rgba(0,255,136,0.08)}
 .sync-saving{color:var(--gold);background:rgba(255,215,0,0.08)}
 .sync-err{color:var(--red);background:rgba(255,68,102,0.08)}
+.sync-warn{color:var(--orange);background:rgba(255,106,0,0.08)}
 
 .btn{background:transparent;border:1px solid var(--border);color:var(--text1);padding:6px 12px;border-radius:7px;cursor:pointer;font-family:'Space Mono',monospace;font-size:11px;letter-spacing:1px;transition:all 0.15s}
 .btn:hover{border-color:var(--green);color:var(--green)}
@@ -513,6 +514,7 @@ async function doRegister(){
 }
 async function doLogout(){
   try{await sb.auth.signOut();}catch(e){console.error('Logout error:',e);}
+  clearRetry();stopSlowWatch();
   currentUser=null;trades={};dataLoaded=false;loadingInProgress=false;
   document.getElementById('authWrap').style.display='flex';
   document.getElementById('appWrap').classList.remove('visible');
@@ -522,35 +524,33 @@ async function doLogout(){
 let dataLoaded=false;
 let loadingInProgress=false;
 
+let retryTimer=null;
+function clearRetry(){if(retryTimer){clearTimeout(retryTimer);retryTimer=null;}}
+function scheduleRetry(ms){
+  if(retryTimer||dataLoaded||!currentUser)return;
+  retryTimer=setTimeout(()=>{retryTimer=null;initData();},ms);
+}
+// Si el SO avisa que volvió la red, reintentamos sin esperar el timer
+window.addEventListener('online',()=>{
+  if(!dataLoaded&&currentUser){clearRetry();initData();}
+});
+
+// Sin test de conexión previo: un fallo de red NO desloguea ni borra el token.
+// loadTrades ya distingue error permanente de caída de red y reintenta solo.
 async function initData(){
   if(loadingInProgress||dataLoaded)return;
   loadingInProgress=true;
   try{
-    // Test connection first with a 5s timeout
-    const test=await Promise.race([
-      sb.from('trades').select('id').limit(1),
-      new Promise((_,rej)=>setTimeout(()=>rej(new Error('timeout')),5000))
-    ]);
-    if(test.error){throw test.error;}
     await loadConfig();
-    await loadTrades();
-    renderUI();
-    dataLoaded=true;
+    const ok=await loadTrades();
+    if(ok&&configLoaded){dataLoaded=true;clearRetry();}
+    else scheduleRetry(15000);   // seguimos logueados, reintentando en background
   }catch(e){
     console.error('initData error:',e);
-    // If timeout, session is probably stale - force re-login
-    if(e.message==='timeout'){
-      console.log('Session stale, clearing...');
-      await sb.auth.signOut().catch(()=>{});
-      localStorage.removeItem('sb-fduslogihpuykumwfmtk-auth-token');
-      currentUser=null;dataLoaded=false;loadingInProgress=false;
-      document.getElementById("authWrap").style.display="flex";
-      document.getElementById("appWrap").classList.remove("visible");
-      showToast('Sesión expirada. Ingresá de nuevo.');
-      return;
-    }
-    showToast('⚠ Error cargando datos.');
+    setSyncStatus('offline');
+    showToast('⚠ Sin conexión — reintentando');
     renderUI();  // que no quede colgado en CARGANDO...
+    scheduleRetry(15000);
   }finally{
     loadingInProgress=false;
   }
@@ -577,19 +577,54 @@ sb.auth.onAuthStateChange(async(event,session)=>{
 });
 
 // ── SUPABASE DATA ──
+const QUERY_TIMEOUT_MS=8000;
+const SLOW_WARN_MS=4000;
+
+// Cancela el timer al resolverse: sin esto quedaba un setTimeout huérfano por intento
+function withTimeout(promise,ms){
+  let timer;
+  const timeout=new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error("timeout")),ms);});
+  return Promise.race([promise,timeout]).finally(()=>clearTimeout(timer));
+}
+
+// Un error permanente no se arregla reintentando: 4xx, o SQLSTATE de privilegios
+// (42501), objeto inexistente (42P01), dato invalido (22P02), constraint (23xxx).
+function isPermanentError(error,status){
+  if(typeof status==="number"&&status>=400&&status<500)return true;
+  const code=error&&error.code?String(error.code):"";
+  return /^(42|22|23)/.test(code);
+}
+
+// Aviso al usuario si la carga se hace larga, en vez de quedarse en CARGANDO hasta el final
+let slowTimer=null;
+function startSlowWatch(){
+  clearTimeout(slowTimer);
+  slowTimer=setTimeout(()=>{setSyncStatus("warn");},SLOW_WARN_MS);
+}
+function stopSlowWatch(){clearTimeout(slowTimer);slowTimer=null;}
+
 async function loadTrades(retries){
-  if(retries===undefined)retries=3;
-  setSyncStatus("loading");
+  const first=retries===undefined;
+  // En los reintentos no se pisa el indicador: si ya avisó "lenta", queda avisando
+  if(first){retries=3;setSyncStatus("loading");startSlowWatch();}
   const brokerAtRequest=currentBroker;
   try{
-    const timeout=new Promise((_,reject)=>setTimeout(()=>reject(new Error("timeout")),15000));
     const query=sb.from("trades").select("*").eq("user_id",currentUser.id).eq("broker",brokerAtRequest);
-    const{data,error}=await Promise.race([query,timeout]);
+    const{data,error,status}=await withTimeout(query,QUERY_TIMEOUT_MS);
     // Respuesta vieja: el usuario ya cambió de cuenta y hay otra carga en curso
-    if(brokerAtRequest!==currentBroker)return;
+    if(brokerAtRequest!==currentBroker){stopSlowWatch();return false;}
     if(error){
+      if(isPermanentError(error,status)){
+        stopSlowWatch();trades={};setSyncStatus("err");
+        console.error("loadTrades error permanente:",status,error);
+        showToast("⚠ "+(error.message||"Error del servidor"));renderUI();return false;
+      }
       if(retries>0){await new Promise(r=>setTimeout(r,2000));return loadTrades(retries-1);}
-      trades={};setSyncStatus("err");showToast("⚠ Error cargando datos");renderUI();return;
+      // status 0 = supabase-js nunca recibió respuesta HTTP (red caída), no es culpa del server
+      const sinRed=!status;
+      stopSlowWatch();trades={};setSyncStatus(sinRed?"offline":"srverr");
+      showToast(sinRed?"⚠ Sin conexión — reintentando":"⚠ El servidor no responde — reintentando");
+      renderUI();return false;
     }
     trades={};
     (data||[]).forEach(row=>{
@@ -600,14 +635,17 @@ async function loadTrades(retries){
         _id:row.id
       };
     });
+    stopSlowWatch();
     setSyncStatus("ok");
     renderUI();
+    return true;
   }catch(e){
-    if(brokerAtRequest!==currentBroker)return;
+    if(brokerAtRequest!==currentBroker){stopSlowWatch();return false;}
     if(retries>0){await new Promise(r=>setTimeout(r,2000));return loadTrades(retries-1);}
-    trades={};setSyncStatus("err");
-    showToast("⚠ Error de conexión. Recargá la página.");
+    stopSlowWatch();trades={};setSyncStatus("offline");
+    showToast("⚠ Sin conexión — reintentando");
     renderUI();
+    return false;
   }
 }
 
@@ -616,7 +654,8 @@ async function loadConfig(){
   configLoaded=false;
   try{
     // maybeSingle: un usuario sin fila de config es un caso normal, no un error
-    const res=await sb.from("user_config").select("*").eq("user_id",currentUser.id).maybeSingle();
+    // withTimeout: sin esto, un server colgado dejaba el arranque esperando para siempre
+    const res=await withTimeout(sb.from("user_config").select("*").eq("user_id",currentUser.id).maybeSingle(),QUERY_TIMEOUT_MS);
     if(res.error)throw res.error;
     data=res.data;
     configLoaded=true;
@@ -688,6 +727,9 @@ function setSyncStatus(s){
   if(s==='ok'){el.classList.add('sync-ok');el.textContent='● SYNC';}
   else if(s==='saving'){el.classList.add('sync-saving');el.textContent='↑ GUARDANDO';}
   else if(s==='loading'){el.classList.add('sync-saving');el.textContent='↓ CARGANDO';}
+  else if(s==='warn'){el.classList.add('sync-warn');el.textContent='◔ CONEXIÓN LENTA';}
+  else if(s==='offline'){el.classList.add('sync-warn');el.textContent='⚠ SIN CONEXIÓN — REINTENTANDO';}
+  else if(s==='srverr'){el.classList.add('sync-warn');el.textContent='⚠ SERVIDOR NO RESPONDE';}
   else{el.classList.add('sync-err');el.textContent='✕ ERROR';}
 }
 
