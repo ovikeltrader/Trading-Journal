@@ -406,8 +406,7 @@ select.fi option{background:var(--bg3)}
     <input type="hidden" id="editKey">
     <div class="form-grid">
       <div class="fg full"><label>FECHA</label><input type="date" class="fi" id="fDate"></div>
-      <div class="fg"><label>P&L ($)</label><input type="number" class="fi" id="fPnl" placeholder="ej: -12.54" step="0.01"></div>
-      <div class="fg"><label>TRADES / CONTRATOS</label><input type="number" class="fi" id="fTrades"></div>
+      <div class="fg"><label>RESULTADO ($)</label><input type="number" class="fi" id="fPnl" placeholder="ej: -12.54" step="0.01"></div>
       <div class="fg"><label>INSTRUMENTO</label>
         <select class="fi" id="fSymbol">
           <option value="">--</option>
@@ -416,12 +415,18 @@ select.fi option{background:var(--bg3)}
           <option>Otro</option>
         </select>
       </div>
+      <div class="fg"><label>CONTRATOS</label><input type="number" class="fi" id="fContracts" step="0.01" placeholder="ej: 2"></div>
+      <div class="fg"><label>DIRECCIÓN</label>
+        <select class="fi" id="fDirection"><option value="">--</option><option value="long">LONG</option><option value="short">SHORT</option></select>
+      </div>
       <div class="fg"><label>PUNTOS</label><input type="number" class="fi" id="fPoints" step="0.25"></div>
-      <div class="fg"><label>WIN RATE %</label><input type="number" class="fi" id="fWinrate"></div>
       <div class="fg"><label>R:R</label><input type="number" class="fi" id="fRr" step="0.1"></div>
-      <div class="fg">
+      <div class="fg full">
         <label>SETUP</label>
         <select class="fi" id="fSetup"><option value="">--</option><option>Mean Reversion</option><option>Trend Continuation</option><option>Breakout</option><option>Reversal</option><option>ICT — Order Block</option><option>ICT — FVG</option><option>Scalp</option><option>Other</option></select>
+      </div>
+      <div class="fg full" style="border-top:1px solid var(--border);padding-top:10px;margin-top:2px">
+        <div style="font-size:9px;letter-spacing:2px;color:var(--text2);font-family:'Space Mono',monospace">DIARIO DEL DÍA — compartido por todas las operaciones de la fecha</div>
       </div>
       <div class="fg">
         <label>EMOCIÓN</label>
@@ -442,6 +447,19 @@ select.fi option{background:var(--bg3)}
       <button class="btn btn-green" onclick="saveTrade()">GUARDAR</button>
       <button id="delBtn" class="del-btn" style="display:none" onclick="deleteTrade()">ELIMINAR</button>
       <button class="btn" onclick="closeModal()">CANCELAR</button>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL DIA: lista las operaciones de una fecha -->
+<div class="overlay" id="dayModal">
+  <div class="modal">
+    <div class="modal-title" id="dayTitle">DÍA</div>
+    <div id="daySummary" style="font-size:11px;color:var(--text2);margin-bottom:10px"></div>
+    <div id="dayOpsList"></div>
+    <div class="modal-actions">
+      <button class="btn btn-green" id="dayAddBtn">+ OPERACIÓN</button>
+      <button class="btn" onclick="closeDayModal()">CERRAR</button>
     </div>
   </div>
 </div>
@@ -475,7 +493,10 @@ const SUPABASE_KEY='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSI
 const sb=supabase.createClient(SUPABASE_URL,SUPABASE_KEY,{auth:{autoRefreshToken:true,persistSession:true,detectSessionInUrl:false},global:{fetch:(...args)=>fetch(...args)}});
 
 let currentUser=null, currentBroker='mt5';
-let trades={}, curYear, curMonth, pendingImgs=[], pendingImport=[];
+let ops=[];        // una fila por operacion: es la fuente de verdad
+let dayNotes={};   // diario del dia: {fecha:{notes,emotion,images}}
+let trades={};     // agregado diario DERIVADO de ops, para calendario/patrimonio/apex
+let curYear, curMonth, pendingImgs=[], pendingImport=[];
 let apexCfg={balance:50000,dd:1500,dll:1000,cons:50};
 let initialBalanceMT5=0;
 let equityCI,pnlCI,pieCI;
@@ -537,13 +558,13 @@ window.addEventListener('online',()=>{
 });
 
 // Sin test de conexión previo: un fallo de red NO desloguea ni borra el token.
-// loadTrades ya distingue error permanente de caída de red y reintenta solo.
+// loadOperations ya distingue error permanente de caída de red y reintenta solo.
 async function initData(){
   if(loadingInProgress||dataLoaded)return;
   loadingInProgress=true;
   try{
     await loadConfig();
-    const ok=await loadTrades();
+    const ok=await loadOperations();
     if(ok&&configLoaded){dataLoaded=true;clearRetry();}
     else scheduleRetry(15000);   // seguimos logueados, reintentando en background
   }catch(e){
@@ -604,46 +625,83 @@ function startSlowWatch(){
 }
 function stopSlowWatch(){clearTimeout(slowTimer);slowTimer=null;}
 
-async function loadTrades(retries){
+function mapOpRow(r){
+  return{
+    id:r.id,date:r.date,symbol:r.symbol||'',contracts:r.contracts,direction:r.direction||'',
+    pnl:parseFloat(r.pnl)||0,commission:parseFloat(r.commission)||0,swap:parseFloat(r.swap)||0,
+    // net_pnl es columna generada en la DB; si faltara, se recalcula igual
+    net:r.net_pnl!==null&&r.net_pnl!==undefined?parseFloat(r.net_pnl)
+        :(parseFloat(r.pnl)||0)+(parseFloat(r.commission)||0)+(parseFloat(r.swap)||0),
+    points:r.points,rr:r.rr,setup:r.setup||'',externalId:r.external_id||'',
+    fromImport:!!r.from_import,legacyCount:r.legacy_trades_count,openedAt:r.opened_at
+  };
+}
+
+// El calendario, el patrimonio y las reglas de APEX siguen razonando por día:
+// este es el único lugar donde las operaciones se agregan.
+function rebuildDaily(){
+  trades={};
+  ops.forEach(o=>{
+    const d=trades[o.date]||(trades[o.date]={pnl:0,count:0,wins:0,_syms:new Set()});
+    d.pnl+=o.net;d.count++;if(o.net>0)d.wins++;if(o.symbol)d._syms.add(o.symbol);
+  });
+  Object.values(trades).forEach(d=>{
+    d.pnl=parseFloat(d.pnl.toFixed(2));
+    d.trades=d.count;
+    d.symbol=[...d._syms].join('/');delete d._syms;
+    d.winrate=d.count?Math.round(d.wins/d.count*100):0;
+  });
+  // días con diario pero sin operaciones: tienen que seguir siendo visibles
+  Object.keys(dayNotes).forEach(k=>{
+    if(!trades[k])trades[k]={pnl:0,count:0,wins:0,trades:0,symbol:'',winrate:0};
+  });
+  Object.entries(trades).forEach(([k,d])=>{
+    const n=dayNotes[k]||{};
+    d.notes=n.notes||'';d.emotion=n.emotion||'';d.images=n.images||[];
+  });
+}
+
+function dayOps(dateKey){return ops.filter(o=>o.date===dateKey);}
+
+async function loadOperations(retries){
   const first=retries===undefined;
   // En los reintentos no se pisa el indicador: si ya avisó "lenta", queda avisando
   if(first){retries=3;setSyncStatus("loading");startSlowWatch();}
   const brokerAtRequest=currentBroker;
+  const limpiar=()=>{ops=[];dayNotes={};trades={};};
   try{
-    const query=sb.from("trades").select("*").eq("user_id",currentUser.id).eq("broker",brokerAtRequest);
-    const{data,error,status}=await withTimeout(query,QUERY_TIMEOUT_MS);
+    const qOps=sb.from("operations").select("*").eq("user_id",currentUser.id).eq("broker",brokerAtRequest);
+    const qNotes=sb.from("day_notes").select("*").eq("user_id",currentUser.id).eq("broker",brokerAtRequest);
+    const[rOps,rNotes]=await withTimeout(Promise.all([qOps,qNotes]),QUERY_TIMEOUT_MS);
     // Respuesta vieja: el usuario ya cambió de cuenta y hay otra carga en curso
     if(brokerAtRequest!==currentBroker){stopSlowWatch();return false;}
+    const error=rOps.error||rNotes.error;
+    const status=rOps.error?rOps.status:rNotes.status;
     if(error){
       if(isPermanentError(error,status)){
-        stopSlowWatch();trades={};setSyncStatus("err");
-        console.error("loadTrades error permanente:",status,error);
+        stopSlowWatch();limpiar();setSyncStatus("err");
+        console.error("loadOperations error permanente:",status,error);
         showToast("⚠ "+(error.message||"Error del servidor"));renderUI();return false;
       }
-      if(retries>0){await new Promise(r=>setTimeout(r,2000));return loadTrades(retries-1);}
+      if(retries>0){await new Promise(r=>setTimeout(r,2000));return loadOperations(retries-1);}
       // status 0 = supabase-js nunca recibió respuesta HTTP (red caída), no es culpa del server
       const sinRed=!status;
-      stopSlowWatch();trades={};setSyncStatus(sinRed?"offline":"srverr");
+      stopSlowWatch();limpiar();setSyncStatus(sinRed?"offline":"srverr");
       showToast(sinRed?"⚠ Sin conexión — reintentando":"⚠ El servidor no responde — reintentando");
       renderUI();return false;
     }
-    trades={};
-    (data||[]).forEach(row=>{
-      trades[row.date]={
-        pnl:parseFloat(row.pnl),trades:row.trades_count,points:row.points,winrate:row.winrate,
-        rr:row.rr,symbol:row.symbol,setup:row.setup,emotion:row.emotion,notes:row.notes,
-        fromImport:row.from_import,importSymbols:row.import_symbols,images:row.images||[],
-        _id:row.id
-      };
-    });
+    ops=(rOps.data||[]).map(mapOpRow);
+    dayNotes={};
+    (rNotes.data||[]).forEach(n=>{dayNotes[n.date]={notes:n.notes||'',emotion:n.emotion||'',images:n.images||[]};});
+    rebuildDaily();
     stopSlowWatch();
     setSyncStatus("ok");
     renderUI();
     return true;
   }catch(e){
     if(brokerAtRequest!==currentBroker){stopSlowWatch();return false;}
-    if(retries>0){await new Promise(r=>setTimeout(r,2000));return loadTrades(retries-1);}
-    stopSlowWatch();trades={};setSyncStatus("offline");
+    if(retries>0){await new Promise(r=>setTimeout(r,2000));return loadOperations(retries-1);}
+    stopSlowWatch();limpiar();setSyncStatus("offline");
     showToast("⚠ Sin conexión — reintentando");
     renderUI();
     return false;
@@ -674,25 +732,49 @@ async function loadConfig(){
   renderEquity();
 }
 
-async function saveTradeToCloud(dateKey,tradeData){
+const numOrNull=v=>{const n=parseFloat(v);return isNaN(n)?null:n;};
+
+// Una operación = una fila. Sin id inserta, con id actualiza.
+async function saveOperation(op){
   setSyncStatus('saving');
   const row={
-    user_id:currentUser.id, date:dateKey, broker:currentBroker,
-    pnl:tradeData.pnl, trades_count:parseInt(tradeData.trades)||0,
-    points:parseFloat(tradeData.points)||0, winrate:parseFloat(tradeData.winrate)||0,
-    rr:parseFloat(tradeData.rr)||0, symbol:tradeData.symbol||'',
-    setup:tradeData.setup||'', emotion:tradeData.emotion||'', notes:tradeData.notes||'',
-    from_import:tradeData.fromImport||false, import_symbols:tradeData.importSymbols||'',
-    images:tradeData.images||[], updated_at:new Date().toISOString()
+    user_id:currentUser.id, broker:currentBroker, date:op.date,
+    symbol:op.symbol||null, contracts:numOrNull(op.contracts),
+    direction:op.direction||null, pnl:parseFloat(op.pnl)||0,
+    commission:parseFloat(op.commission)||0, swap:parseFloat(op.swap)||0,
+    points:numOrNull(op.points), rr:numOrNull(op.rr), setup:op.setup||'',
+    updated_at:new Date().toISOString()
   };
-  const{error}=await sb.from('trades').upsert(row,{onConflict:'user_id,date,broker'});
-  if(error){setSyncStatus('err');showToast('⚠ Error al guardar');}
-  else setSyncStatus('ok');
+  const q=op.id
+    ? sb.from('operations').update(row).eq('id',op.id).select().single()
+    : sb.from('operations').insert(row).select().single();
+  const{data,error}=await q;
+  if(error){setSyncStatus('err');showToast('⚠ Error al guardar: '+error.message);return null;}
+  setSyncStatus('ok');
+  return mapOpRow(data);
 }
 
-async function deleteTradeFromCloud(dateKey){
+async function deleteOperation(id){
   setSyncStatus('saving');
-  await sb.from('trades').delete().eq('user_id',currentUser.id).eq('date',dateKey).eq('broker',currentBroker);
+  const{error}=await sb.from('operations').delete().eq('id',id);
+  if(error){setSyncStatus('err');showToast('⚠ Error al eliminar');return false;}
+  setSyncStatus('ok');return true;
+}
+
+// El diario es del día, no de la operación
+async function saveDayNotes(dateKey,n){
+  const vacio=!(n.notes||'')&&!(n.emotion||'')&&!(n.images||[]).length;
+  setSyncStatus('saving');
+  if(vacio){
+    await sb.from('day_notes').delete().eq('user_id',currentUser.id).eq('broker',currentBroker).eq('date',dateKey);
+    delete dayNotes[dateKey];
+    setSyncStatus('ok');return;
+  }
+  const row={user_id:currentUser.id,broker:currentBroker,date:dateKey,
+    notes:n.notes||'',emotion:n.emotion||'',images:n.images||[],updated_at:new Date().toISOString()};
+  const{error}=await sb.from('day_notes').upsert(row,{onConflict:'user_id,broker,date'});
+  if(error){setSyncStatus('err');showToast('⚠ Error al guardar el diario');return;}
+  dayNotes[dateKey]={notes:row.notes,emotion:row.emotion,images:row.images};
   setSyncStatus('ok');
 }
 
@@ -748,9 +830,9 @@ async function setBroker(b,el){
   currentBroker=b;
   document.querySelectorAll('.broker-btn').forEach(btn=>btn.classList.remove('active'));
   el.classList.add('active');
-  trades={};      // el P&L se deriva de acá: sin limpiar, APEX mostraría el de MT5
+  ops=[];dayNotes={};trades={};  // sin limpiar, una cuenta mostraría el P&L de la otra
   showLoading();
-  await loadTrades();  // renderUI() se dispara adentro, ya con la data de la cuenta correcta
+  await loadOperations();  // renderUI() se dispara adentro, ya con la data de la cuenta correcta
 }
 
 // ── TABS ──
@@ -806,21 +888,27 @@ function getMonthTrades(){
   return Object.entries(trades).filter(([k])=>k.startsWith(p));
 }
 
+function getMonthOps(){
+  const p=`${curYear}-${String(curMonth+1).padStart(2,'0')}`;
+  return ops.filter(o=>o.date.startsWith(p));
+}
+
 function renderMetrics(){
   const mt=getMonthTrades();
+  const mo=getMonthOps();                       // win rate y R:R ahora son POR OPERACIÓN
   const pnl=mt.reduce((s,[,v])=>s+parseFloat(v.pnl||0),0);
-  const tt=mt.reduce((s,[,v])=>s+parseInt(v.trades||0),0);
-  const wins=mt.filter(([,v])=>parseFloat(v.pnl||0)>0).length;
-  const losses=mt.filter(([,v])=>parseFloat(v.pnl||0)<0).length;
-  const wr=mt.length?Math.round(wins/mt.length*100):0;
-  const rrs=mt.filter(([,v])=>v.rr).map(([,v])=>parseFloat(v.rr));
+  const tt=mo.length;
+  const wins=mo.filter(o=>o.net>0).length;
+  const losses=mo.filter(o=>o.net<0).length;
+  const wr=mo.length?Math.round(wins/mo.length*100):0;
+  const rrs=mo.filter(o=>o.rr).map(o=>parseFloat(o.rr));
   const avgRr=rrs.length?(rrs.reduce((a,b)=>a+b,0)/rrs.length).toFixed(2):'0.00';
   const mn=['ENE','FEB','MAR','ABR','MAY','JUN','JUL','AGO','SEP','OCT','NOV','DIC'];
   document.getElementById('calTitle').textContent=`${mn[curMonth]} ${curYear}`;
   document.getElementById('monthSel').value=curMonth;document.getElementById('yearSel').value=curYear;
   const hm=document.getElementById('hMonth');if(hm)hm.textContent=`${mn[curMonth]} ${curYear}`;
   const pe=document.getElementById('mPnl');pe.textContent=(pnl>=0?'+':'')+fmt(pnl);pe.className='metric-value '+(pnl>=0?'green':'red');
-  document.getElementById('mPnlSub').textContent=`${mt.length} días operados`;
+  document.getElementById('mPnlSub').textContent=`${mt.length} días · ${mo.length} ${mo.length===1?'operación':'operaciones'}`;
   document.getElementById('mWr').textContent=wr+'%';document.getElementById('mWrBar').style.width=wr+'%';
   document.getElementById('mRr').textContent=avgRr;document.getElementById('mTrades').textContent=tt;
   document.getElementById('mWL').textContent=`${wins}W / ${losses}L`;
@@ -935,16 +1023,17 @@ function renderCalendar(){
     const key=`${curYear}-${String(curMonth+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
     const t=trades[key];const el=document.createElement('div');
     let cls='cal-cell';
-    if(t){const p=parseFloat(t.pnl||0);cls+=p>0?' has-win':' has-loss';cls+=currentBroker==='mt5'?' has-mt5':' has-apex';if(p>0&&allWinPnL>0&&currentBroker==='apex'&&consistencyAplica()&&(p/allWinPnL)*100>apexCfg.cons)cls+=' cons-warn';}
+    if(t){const p=parseFloat(t.pnl||0);cls+=p>0?' has-win':p<0?' has-loss':'';cls+=currentBroker==='mt5'?' has-mt5':' has-apex';if(p>0&&allWinPnL>0&&currentBroker==='apex'&&consistencyAplica()&&(p/allWinPnL)*100>apexCfg.cons)cls+=' cons-warn';}
     if(today.getFullYear()===curYear&&today.getMonth()===curMonth&&today.getDate()===d)cls+=' today';
     el.className=cls;el.innerHTML=`<div class="cal-num">${d}</div>`;
     if(t){
       const p=parseFloat(t.pnl||0);
       el.innerHTML+=`<div class="cal-pnl ${p>=0?'green':'red'}">${p>=0?'+':''}${fmt(p)}</div>`;
-      if(t.trades)el.innerHTML+=`<div class="cal-meta">${t.trades} trades${t.symbol?' · '+t.symbol:''}</div>`;
+      if(t.trades)el.innerHTML+=`<div class="cal-meta">${t.trades} ${t.trades===1?'op':'ops'}${t.symbol?' · '+t.symbol:''}</div>`;
       if(t.images&&t.images.length)el.innerHTML+=`<div style="font-size:8px;color:var(--blue)">📷${t.images.length}</div>`;
     }
-    el.onclick=()=>openEdit(key);g.appendChild(el);
+    // el día abre la lista de operaciones; si está vacío, carga una nueva directo
+    el.onclick=()=>{if(trades[key]&&trades[key].count)openDay(key);else openNewTrade(key);};g.appendChild(el);
   }
 }
 function renderWeekly(){
@@ -1022,19 +1111,32 @@ function processImportFile(f){
   }
 }
 
+// Columnas de la secci\u00f3n Posiciones del reporte MT5:
+// 0 apertura \u00b7 1 ticket \u00b7 2 s\u00edmbolo \u00b7 3 tipo \u00b7 5 volumen \u00b7 9 cierre \u00b7 11 comisi\u00f3n \u00b7 12 swap \u00b7 13 beneficio
 function parseMT5(html){
-  const doc=new DOMParser().parseFromString(html,'text/html'),byDay={};
+  const doc=new DOMParser().parseFromString(html,'text/html'),lista=[];
+  const num=s=>parseFloat(String(s).replace(/\s/g,'').replace(',','.'));
   doc.querySelectorAll('tr').forEach(row=>{
     const tds=Array.from(row.querySelectorAll('td'));if(tds.length!==14)return;
     const cells=tds.map(td=>td.textContent.replace(/\u00a0/g,' ').trim());
     if(!/^\d{4}\.\d{2}\.\d{2}/.test(cells[0]))return;
-    const typ=(cells[3]||'').toLowerCase();if(typ==='balance'||typ==='credit'||typ==='deposit'||typ==='withdrawal')return;
-    const profit=parseFloat(cells[13].replace(/\s/g,'').replace(',','.'));if(isNaN(profit))return;
-    const dk=cells[0].slice(0,10).replace(/\./g,'-'),sym=cells[2]||'';
-    if(!byDay[dk])byDay[dk]={profit:0,count:0,symbols:new Set()};
-    byDay[dk].profit+=profit;byDay[dk].count++;if(sym)byDay[dk].symbols.add(sym);
+    const typ=(cells[3]||'').toLowerCase();
+    if(['balance','credit','deposit','withdrawal'].includes(typ))return;
+    const profit=num(cells[13]);if(isNaN(profit))return;
+    lista.push({
+      date:cells[0].slice(0,10).replace(/\./g,'-'),
+      openedAt:cells[0].replace(/\./g,'-').replace(' ','T'),
+      closedAt:cells[9]?cells[9].replace(/\./g,'-').replace(' ','T'):null,
+      symbol:cells[2]||'',
+      direction:typ==='buy'?'long':typ==='sell'?'short':null,
+      contracts:isNaN(num(cells[5]))?null:num(cells[5]),
+      pnl:profit,
+      commission:isNaN(num(cells[11]))?0:num(cells[11]),
+      swap:isNaN(num(cells[12]))?0:num(cells[12]),
+      externalId:cells[1]||null
+    });
   });
-  showImportPreview(byDay,'mt5');
+  showImportPreview(lista,'mt5');
 }
 
 function parseTradovate(csv){
@@ -1043,7 +1145,7 @@ function parseTradovate(csv){
   const fi=(...names)=>names.reduce((f,n)=>{if(f>=0)return f;return header.findIndex(h=>h.includes(n));},-1);
   const iDate=fi('date','time','timestamp'),iSymbol=fi('symbol','contract','instrument'),iPnl=fi('p&l','pnl','profit','gain','realized'),iQty=fi('qty','quantity','contracts');
   if(iDate<0||iPnl<0){showToast('⚠ No se detectaron columnas. Verificá el CSV.');return;}
-  const byDay={};
+  const lista=[];
   for(let i=1;i<lines.length;i++){
     if(!lines[i].trim())continue;
     const vals=(lines[i].match(/(".*?"|[^,]+)(?=,|$)/g)||lines[i].split(',')).map(v=>v.trim().replace(/^"|"$/g,''));
@@ -1052,18 +1154,25 @@ function parseTradovate(csv){
     const dk=dm[1].length===4?`${dm[1]}-${dm[2]}-${dm[3]}`:`${dm[3]}-${dm[1]}-${dm[2]}`;
     const pnl=parseFloat((vals[iPnl]||'').replace(/[$\s,]/g,''));if(isNaN(pnl))continue;
     const sym=(iSymbol>=0?vals[iSymbol]:'').toUpperCase().slice(0,6);
-    const qty=iQty>=0?parseInt(vals[iQty]||'1')||1:1;
-    if(!byDay[dk])byDay[dk]={profit:0,count:0,symbols:new Set(),contracts:0};
-    byDay[dk].profit+=pnl;byDay[dk].count++;byDay[dk].contracts+=qty;if(sym)byDay[dk].symbols.add(sym);
+    const qty=iQty>=0?parseFloat(vals[iQty]||'1')||1:1;
+    // Tradovate no trae un id de operación: sin externalId no hay deduplicación
+    lista.push({date:dk,symbol:sym,direction:null,contracts:qty,pnl,commission:0,swap:0,
+                externalId:null,openedAt:null,closedAt:null});
   }
-  showImportPreview(byDay,'tradovate');
+  showImportPreview(lista,'tradovate');
 }
 
-function showImportPreview(byDay,source){
-  const days=Object.entries(byDay).filter(([,d])=>d.count>0).sort(([a],[b])=>a.localeCompare(b))
+function showImportPreview(lista,source){
+  if(!lista.length){showToast('⚠ No se detectaron trades.');return;}
+  pendingImport=lista;
+  // el preview sigue mostrándose por día, pero lo que se guarda son operaciones
+  const porDia={};
+  lista.forEach(o=>{
+    const d=porDia[o.date]||(porDia[o.date]={profit:0,count:0,symbols:new Set()});
+    d.profit+=o.pnl+o.commission+o.swap;d.count++;if(o.symbol)d.symbols.add(o.symbol);
+  });
+  const days=Object.entries(porDia).sort(([a],[b])=>a.localeCompare(b))
     .map(([date,d])=>({date,profit:parseFloat(d.profit.toFixed(2)),count:d.count,symbols:[...d.symbols].join('/')}));
-  if(!days.length){showToast('⚠ No se detectaron trades.');return;}
-  pendingImport=days;
   const total=days.reduce((s,t)=>s+t.profit,0),newD=days.filter(t=>!trades[t.date]).length;
   const wrap=document.getElementById('importPreviewWrap');
   wrap.style.display='block';
@@ -1085,29 +1194,37 @@ async function confirmImport(){
   if(!pendingImport.length)return;
   if(!currentUser){showToast('⚠ Tenés que iniciar sesión primero');return;}
   setSyncStatus('saving');
-  let saved=0,errors=0;
-  for(const t of pendingImport){
-    const ex=trades[t.date]||{};
-    const td={...ex,pnl:t.profit,trades:t.count,fromImport:true,importSymbols:t.symbols,images:ex.images||[],notes:ex.notes||'',emotion:ex.emotion||'',setup:ex.setup||'',rr:ex.rr||'',winrate:ex.winrate||'',points:ex.points||''};
-    trades[t.date]=td;
-    const row={
-      user_id:currentUser.id,date:t.date,broker:currentBroker,
-      pnl:td.pnl,trades_count:parseInt(td.trades)||0,points:parseFloat(td.points)||0,
-      winrate:parseFloat(td.winrate)||0,rr:parseFloat(td.rr)||0,symbol:td.importSymbols||'',
-      setup:'',emotion:'',notes:'',from_import:true,import_symbols:td.importSymbols||'',
-      images:[],updated_at:new Date().toISOString()
-    };
-    const{error}=await sb.from('trades').upsert(row,{onConflict:'user_id,date,broker'});
-    if(error){errors++;console.error('Error saving',t.date,error);}
-    else saved++;
+  // Deduplicación por ticket contra lo ya cargado. Sin ticket (Tradovate) no hay
+  // forma de saber si es la misma operación: reimportar duplicaría.
+  const yaEstan=new Set(ops.filter(o=>o.externalId).map(o=>o.externalId));
+  const nuevas=pendingImport.filter(o=>!o.externalId||!yaEstan.has(o.externalId));
+  const repetidas=pendingImport.length-nuevas.length;
+  if(!nuevas.length){
+    setSyncStatus('ok');cancelImport();
+    showToast(`Ya estaban las ${repetidas} operaciones. Nada para importar.`);
+    pendingImport=[];return;
   }
+  const filas=nuevas.map(o=>({
+    user_id:currentUser.id,broker:currentBroker,date:o.date,
+    opened_at:o.openedAt||null,closed_at:o.closedAt||null,
+    symbol:o.symbol||null,contracts:o.contracts,direction:o.direction,
+    pnl:o.pnl,commission:o.commission||0,swap:o.swap||0,
+    external_id:o.externalId||null,from_import:true,updated_at:new Date().toISOString()
+  }));
+  const{error}=await sb.from('operations').insert(filas);
+  if(error){
+    setSyncStatus('err');console.error('Error importando',error);
+    showToast('⚠ Error al importar: '+error.message);return;
+  }
+  const total=nuevas.reduce((s,o)=>s+o.pnl+(o.commission||0)+(o.swap||0),0);
+  const dias=new Set(nuevas.map(o=>o.date)).size;
   const hist=JSON.parse(localStorage.getItem(impHistKey())||'[]');
-  hist.unshift({date:new Date().toISOString().split('T')[0],days:pendingImport.length,total:pendingImport.reduce((s,t)=>s+t.profit,0).toFixed(2)});
+  hist.unshift({date:new Date().toISOString().split('T')[0],days:dias,total:total.toFixed(2)});
   localStorage.setItem(impHistKey(),JSON.stringify(hist.slice(0,10)));
-  renderCalendar();renderWeekly();cancelImport();renderImportHistory();
-  if(currentBroker==='apex')renderApexRules();
-  if(errors>0)showToast(`⚠ ${saved} guardados, ${errors} errores. Revisá consola.`);
-  else{setSyncStatus('ok');showToast(`✓ ${saved} días importados y guardados en la nube`);}
+  cancelImport();
+  await loadOperations();   // recarga para tomar ids y net_pnl reales de la DB
+  renderImportHistory();
+  showToast(`✓ ${nuevas.length} operaciones en ${dias} días${repetidas?` · ${repetidas} ya estaban`:''}`);
   pendingImport=[];
 }
 function cancelImport(){pendingImport=[];const w=document.getElementById('importPreviewWrap');if(w)w.style.display='none';}
@@ -1120,51 +1237,116 @@ function renderImportHistory(){
   el.innerHTML=hist.map(h=>`<div class="stat-row"><span class="stat-label">${h.date}</span><span><span class="badge ${currentBroker==='apex'?'badge-apex':'badge-mt5'}">${h.days} días</span> &nbsp;<span class="${parseFloat(h.total)>=0?'green':'red'}">${parseFloat(h.total)>=0?'+':''}${fmt(parseFloat(h.total))}</span></span></div>`).join('');
 }
 
-// ── MODAL TRADE ──
-function openNewTrade(){
-  pendingImgs=[];
-  document.getElementById('editKey').value='';document.getElementById('modalTitle').textContent='NUEVA ENTRADA';
-  document.getElementById('delBtn').style.display='none';
-  document.getElementById('fDate').value=new Date().toISOString().split('T')[0];
-  ['fPnl','fTrades','fPoints','fWinrate','fRr'].forEach(id=>document.getElementById(id).value='');
-  document.getElementById('fSymbol').value='';document.getElementById('fSetup').value='';document.getElementById('fEmotion').value='';document.getElementById('fNotes').value='';
+// ── MODAL OPERACIÓN ──
+const setVal=(id,v)=>{document.getElementById(id).value=v===null||v===undefined?'':v;};
+
+function cargarDiarioEnModal(key){
+  const n=dayNotes[key]||{};
+  pendingImgs=n.images?[...n.images]:[];
+  setVal('fEmotion',n.emotion||'');setVal('fNotes',n.notes||'');
   document.getElementById('imgInput').value='';renderModalImgs();
+}
+
+// Nueva operación. dateKey opcional: si viene, la precarga (click en el calendario).
+function openNewTrade(dateKey){
+  const key=dateKey||new Date().toISOString().split('T')[0];
+  document.getElementById('editKey').value='';
+  document.getElementById('modalTitle').textContent='NUEVA OPERACIÓN';
+  document.getElementById('delBtn').style.display='none';
+  setVal('fDate',key);
+  ['fPnl','fContracts','fPoints','fRr'].forEach(id=>setVal(id,''));
+  setVal('fSymbol','');setVal('fDirection','');setVal('fSetup','');
+  cargarDiarioEnModal(key);
   document.getElementById('tradeModal').classList.add('open');
 }
-function openEdit(key){
-  const t=trades[key]||{};pendingImgs=t.images?[...t.images]:[];
-  document.getElementById('editKey').value=key;document.getElementById('modalTitle').textContent='EDITAR — '+key;
-  document.getElementById('delBtn').style.display='block';document.getElementById('fDate').value=key;
-  document.getElementById('fPnl').value=t.pnl||'';document.getElementById('fTrades').value=t.trades||'';
-  document.getElementById('fPoints').value=t.points||'';document.getElementById('fWinrate').value=t.winrate||'';
-  document.getElementById('fRr').value=t.rr||'';document.getElementById('fSymbol').value=t.symbol||t.importSymbols||'';
-  document.getElementById('fSetup').value=t.setup||'';document.getElementById('fEmotion').value=t.emotion||'';
-  document.getElementById('fNotes').value=t.notes||'';document.getElementById('imgInput').value='';renderModalImgs();
+
+function openEditOp(id){
+  const o=ops.find(x=>x.id===id);if(!o)return;
+  closeDayModal();
+  document.getElementById('editKey').value=o.id;
+  document.getElementById('modalTitle').textContent='EDITAR OPERACIÓN — '+o.date;
+  document.getElementById('delBtn').style.display='block';
+  setVal('fDate',o.date);setVal('fPnl',o.pnl);setVal('fContracts',o.contracts);
+  setVal('fSymbol',o.symbol);setVal('fDirection',o.direction);
+  setVal('fPoints',o.points);setVal('fRr',o.rr);setVal('fSetup',o.setup);
+  cargarDiarioEnModal(o.date);
   document.getElementById('tradeModal').classList.add('open');
 }
+
+// ── MODAL DÍA ──
+function openDay(key){
+  const lista=dayOps(key).slice().sort((a,b)=>(a.openedAt||'').localeCompare(b.openedAt||''));
+  const d=trades[key];
+  document.getElementById('dayTitle').textContent='DÍA '+key;
+  document.getElementById('daySummary').innerHTML=lista.length
+    ?`<span class="${d.pnl>=0?'green':'red'}" style="font-weight:700">${d.pnl>=0?'+':''}${fmt(d.pnl)}</span> · ${lista.length} ${lista.length===1?'operación':'operaciones'} · ${d.winrate}% WR`
+    :'Sin operaciones cargadas en esta fecha.';
+  document.getElementById('dayOpsList').innerHTML=lista.map(o=>{
+    const dir=o.direction?`<span class="badge">${o.direction==='long'?'LONG':'SHORT'}</span>`:'';
+    const sym=o.symbol?`<span class="badge ${currentBroker==='apex'?'badge-apex':'badge-mt5'}">${o.symbol}</span>`:'';
+    const ct=o.contracts!==null&&o.contracts!==undefined?`<span class="badge">${o.contracts} ct</span>`:'';
+    const lg=o.legacyCount&&o.contracts===null?`<span class="badge badge-warn">${o.legacyCount} ct s/confirmar</span>`:'';
+    return`<div class="stat-row" style="align-items:center">
+      <span>${sym}${dir}${ct}${lg}</span>
+      <span style="display:flex;align-items:center;gap:8px">
+        <span class="${o.net>=0?'green':'red'}" style="font-weight:700">${o.net>=0?'+':''}${fmt(o.net)}</span>
+        <button class="btn btn-sm" onclick="openEditOp('${o.id}')">EDITAR</button>
+      </span></div>`;
+  }).join('')||'';
+  document.getElementById('dayAddBtn').onclick=()=>{closeDayModal();openNewTrade(key);};
+  document.getElementById('dayModal').classList.add('open');
+}
+function closeDayModal(){document.getElementById('dayModal').classList.remove('open');}
 function handleImgs(e){Array.from(e.target.files).forEach(f=>{const r=new FileReader();r.onload=ev=>{pendingImgs.push(ev.target.result);renderModalImgs();};r.readAsDataURL(f);});}
 function renderModalImgs(){
   const c=document.getElementById('modalImgs');c.innerHTML='';
   pendingImgs.forEach((src,i)=>{const w=document.createElement('div');w.className='mimg-wrap';w.innerHTML=`<img class="mimg" src="${src}" onclick="openLightbox('${src}')"><button class="mimg-del" onclick="removeImg(${i})">✕</button>`;c.appendChild(w);});
 }
 function removeImg(i){pendingImgs.splice(i,1);renderModalImgs();}
+function refrescarVistas(){
+  rebuildDaily();
+  renderMetrics();renderCalendar();renderWeekly();renderEquity();
+  if(currentBroker==='apex')renderApexRules();
+}
+
 async function saveTrade(){
   const key=document.getElementById('fDate').value;if(!key){showToast('⚠ Fecha requerida');return;}
-  const pnl=document.getElementById('fPnl').value;if(pnl===''){showToast('⚠ P&L requerido');return;}
-  const ex=trades[key]||{};
-  const td={...ex,pnl:parseFloat(pnl),trades:document.getElementById('fTrades').value,points:document.getElementById('fPoints').value,winrate:document.getElementById('fWinrate').value,rr:document.getElementById('fRr').value,symbol:document.getElementById('fSymbol').value,setup:document.getElementById('fSetup').value,emotion:document.getElementById('fEmotion').value,notes:document.getElementById('fNotes').value,images:[...pendingImgs]};
-  trades[key]=td;
-  closeModal();renderCalendar();renderWeekly();if(currentBroker==='apex')renderApexRules();
-  await saveTradeToCloud(key,td);
+  const pnl=document.getElementById('fPnl').value;if(pnl===''){showToast('⚠ Resultado requerido');return;}
+  const id=document.getElementById('editKey').value;
+  const op={
+    id:id||null,date:key,pnl:parseFloat(pnl),
+    contracts:document.getElementById('fContracts').value,
+    symbol:document.getElementById('fSymbol').value,
+    direction:document.getElementById('fDirection').value,
+    points:document.getElementById('fPoints').value,
+    rr:document.getElementById('fRr').value,
+    setup:document.getElementById('fSetup').value,
+    commission:0,swap:0
+  };
+  const diario={emotion:document.getElementById('fEmotion').value,
+                notes:document.getElementById('fNotes').value,images:[...pendingImgs]};
+  closeModal();
+  const guardada=await saveOperation(op);
+  if(!guardada)return;                       // el error ya se avisó; no se toca el estado local
+  if(!guardada.date){                        // respuesta con forma inesperada: no ensuciar el estado
+    console.error('saveOperation devolvió una fila sin fecha',guardada);
+    await saveDayNotes(key,diario);await loadOperations();return;
+  }
+  if(id){const i=ops.findIndex(o=>o.id===id);if(i>=0)ops[i]=guardada;}
+  else ops.push(guardada);
+  await saveDayNotes(key,diario);
+  refrescarVistas();
   showToast('✓ GUARDADO EN LA NUBE');
 }
+
 async function deleteTrade(){
-  const key=document.getElementById('editKey').value;if(!key)return;
-  if(!confirm('¿Eliminar esta entrada?'))return;
-  delete trades[key];
-  closeModal();renderCalendar();renderWeekly();if(currentBroker==='apex')renderApexRules();
-  await deleteTradeFromCloud(key);
-  showToast('✕ ELIMINADO');
+  const id=document.getElementById('editKey').value;if(!id)return;
+  if(!confirm('¿Eliminar esta operación?'))return;
+  closeModal();
+  if(!await deleteOperation(id))return;
+  ops=ops.filter(o=>o.id!==id);
+  refrescarVistas();
+  showToast('✕ ELIMINADA');
 }
 function closeModal(){document.getElementById('tradeModal').classList.remove('open');pendingImgs=[];}
 function openLightbox(src){document.getElementById('lbImg').src=src;document.getElementById('lightbox').classList.add('open');}
@@ -1186,19 +1368,32 @@ function renderJournal(){
   el.innerHTML=all.map(([k,v])=>{
     const p=parseFloat(v.pnl||0);
     const eb=v.emotion?`<span class="badge">${v.emotion}</span>`:'';
-    const sb=v.setup?`<span class="badge">${v.setup}</span>`:'';
-    const ib=v.fromImport?`<span class="badge ${currentBroker==='apex'?'badge-apex':'badge-mt5'}">${currentBroker==='mt5'?'MT5':'TRADOVATE'}</span>`:'';
-    const sym=v.symbol||v.importSymbols;
-    const symB=sym?`<span class="badge ${currentBroker==='apex'?'badge-apex':'badge-mt5'}">${sym}</span>`:'';
     const cw=currentBroker==='apex'&&p>0&&allWin>0&&consistencyAplica()&&(p/allWin)*100>apexCfg.cons?`<span class="badge badge-warn">⚠ CONS</span>`:'';
     const imgs=v.images&&v.images.length?`<div class="je-imgs">${v.images.map(s=>`<img class="je-img" src="${s}" onclick="openLightbox('${s}')">`).join('')}</div>`:'';
+    // una línea por operación dentro del día
+    const lista=dayOps(k).slice().sort((a,b)=>(a.openedAt||'').localeCompare(b.openedAt||''));
+    const filas=lista.map(o=>{
+      const sym=o.symbol?`<span class="badge ${currentBroker==='apex'?'badge-apex':'badge-mt5'}">${o.symbol}</span>`:'';
+      const dir=o.direction?`<span class="badge">${o.direction==='long'?'LONG':'SHORT'}</span>`:'';
+      const ct=o.contracts!==null&&o.contracts!==undefined?`<span class="badge">${o.contracts} ct</span>`:'';
+      const st=o.setup?`<span class="badge">${o.setup}</span>`:'';
+      const rr=o.rr?`<span class="badge">R:R ${o.rr}</span>`:'';
+      const ib=o.fromImport?`<span class="badge ${currentBroker==='apex'?'badge-apex':'badge-mt5'}">IMPORT</span>`:'';
+      return`<div class="stat-row" style="align-items:center">
+        <span>${sym}${dir}${ct}${st}${rr}${ib}</span>
+        <span style="display:flex;align-items:center;gap:8px">
+          <span class="${o.net>=0?'green':'red'}" style="font-weight:700">${o.net>=0?'+':''}${fmt(o.net)}</span>
+          <button class="btn btn-sm" onclick="openEditOp('${o.id}')">EDITAR</button>
+        </span></div>`;
+    }).join('');
     return`<div class="je">
       <div class="je-header">
-        <div><div class="je-date">${k}</div><div style="margin-top:4px">${ib}${symB}${eb}${sb}${cw}</div></div>
-        <div><div class="je-pnl ${p>=0?'green':'red'}">${p>=0?'+':''}${fmt(p)}</div>${v.trades?`<div style="font-size:10px;color:var(--text2);text-align:right">${v.trades} trades${v.winrate?' · '+v.winrate+'% WR':''}</div>`:''}</div>
+        <div><div class="je-date">${k}</div><div style="margin-top:4px">${eb}${cw}</div></div>
+        <div><div class="je-pnl ${p>=0?'green':'red'}">${p>=0?'+':''}${fmt(p)}</div>${v.trades?`<div style="font-size:10px;color:var(--text2);text-align:right">${v.trades} ${v.trades===1?'operación':'operaciones'} · ${v.winrate}% WR</div>`:''}</div>
       </div>
+      ${filas}
       ${v.notes?`<div class="je-notes">${v.notes}</div>`:''}${imgs}
-      <button class="btn btn-sm" style="margin-top:6px" onclick="openEdit('${k}')">EDITAR</button>
+      <button class="btn btn-sm" style="margin-top:6px" onclick="openNewTrade('${k}')">+ OPERACIÓN</button>
     </div>`;
   }).join('');
 }
@@ -1210,12 +1405,15 @@ function renderAnalytics(){
   const labels=[],eq=[],pd=[],pc=[];
   let run=currentBroker==='apex'?apexCfg.balance:initialBalanceMT5;
   all.forEach(([k,v])=>{const p=parseFloat(v.pnl||0);run+=p;labels.push(k.slice(5));eq.push(parseFloat(run.toFixed(2)));pd.push(parseFloat(p.toFixed(2)));pc.push(p>=0?'rgba(0,255,136,0.7)':'rgba(255,68,102,0.7)');});
-  const wins=all.filter(([,v])=>parseFloat(v.pnl||0)>0).length;
+  // Días para el equity y el P&L; operaciones para win rate y R:R
+  const winsDias=all.filter(([,v])=>parseFloat(v.pnl||0)>0).length;
+  const wins=ops.filter(o=>o.net>0).length;
   const tot=parseFloat(all.reduce((s,[,v])=>s+parseFloat(v.pnl||0),0).toFixed(2));
   const best=Math.max(...all.map(([,v])=>parseFloat(v.pnl||0)));
   const worst=Math.min(...all.map(([,v])=>parseFloat(v.pnl||0)));
   const avg=parseFloat((tot/all.length).toFixed(2));
-  const rrs=all.filter(([,v])=>v.rr).map(([,v])=>parseFloat(v.rr));
+  const avgOp=ops.length?parseFloat((tot/ops.length).toFixed(2)):0;
+  const rrs=ops.filter(o=>o.rr).map(o=>parseFloat(o.rr));
   const arr=rrs.length?(rrs.reduce((a,b)=>a+b,0)/rrs.length).toFixed(2):'N/A';
   const mdd=calcMaxDD(eq);
   const color=currentBroker==='apex'?'#aa66ff':'#ff6a00';
@@ -1225,25 +1423,28 @@ function renderAnalytics(){
   if(pnlCI)pnlCI.destroy();
   pnlCI=new Chart(document.getElementById('pnlChart'),{type:'bar',data:{labels,datasets:[{data:pd,backgroundColor:pc}]},options:{...opts}});
   if(pieCI)pieCI.destroy();
-  pieCI=new Chart(document.getElementById('pieChart'),{type:'doughnut',data:{labels:['Wins','Losses'],datasets:[{data:[wins,all.length-wins],backgroundColor:[color.replace(')',',0.7)').replace('rgb','rgba'),'rgba(255,68,102,0.7)'],borderWidth:0}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{labels:{color:'#7777aa',font:{size:10}}}}}});
+  pieCI=new Chart(document.getElementById('pieChart'),{type:'doughnut',data:{labels:['Wins','Losses'],datasets:[{data:[wins,ops.filter(o=>o.net<0).length],backgroundColor:[color.replace(')',',0.7)').replace('rgb','rgba'),'rgba(255,68,102,0.7)'],borderWidth:0}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{labels:{color:'#7777aa',font:{size:10}}}}}});
   const curEq=currentBroker==='apex'?apexCfg.balance+tot:initialBalanceMT5+tot;
   document.getElementById('statsDetail').innerHTML=`
     <div class="stat-row"><span class="stat-label">Equity actual</span><span class="${currentBroker==='apex'?'purple':'orange'}" style="font-weight:700">${fmt(curEq)}</span></div>
     <div class="stat-row"><span class="stat-label">Total P&L</span><span class="${tot>=0?'green':'red'}">${tot>=0?'+':''}${fmt(tot)}</span></div>
-    <div class="stat-row"><span class="stat-label">Mejor día</span><span class="green">+${fmt(best)}</span></div>
-    <div class="stat-row"><span class="stat-label">Peor día</span><span class="red">${fmt(worst)}</span></div>
+    <div class="stat-row"><span class="stat-label">Mejor día</span><span class="${best>=0?'green':'red'}">${best>=0?'+':'-'}${fmt(best)}</span></div>
+    <div class="stat-row"><span class="stat-label">Peor día</span><span class="${worst>=0?'green':'red'}">${worst>=0?'+':'-'}${fmt(worst)}</span></div>
     <div class="stat-row"><span class="stat-label">Promedio/día</span><span class="${avg>=0?'green':'red'}">${avg>=0?'+':''}${fmt(avg)}</span></div>
-    <div class="stat-row"><span class="stat-label">Win Rate</span><span>${Math.round(wins/all.length*100)}%</span></div>
+    <div class="stat-row"><span class="stat-label">Promedio/operación</span><span class="${avgOp>=0?'green':'red'}">${avgOp>=0?'+':''}${fmt(avgOp)}</span></div>
+    <div class="stat-row"><span class="stat-label">Win Rate (por operación)</span><span>${ops.length?Math.round(wins/ops.length*100):0}%</span></div>
+    <div class="stat-row"><span class="stat-label">Win Rate (por día)</span><span style="color:var(--text2)">${Math.round(winsDias/all.length*100)}%</span></div>
     <div class="stat-row"><span class="stat-label">Avg R:R</span><span class="gold">${arr}</span></div>
     <div class="stat-row"><span class="stat-label">Max Drawdown</span><span class="red">-${fmt(mdd)}</span></div>
-    <div class="stat-row"><span class="stat-label">Días totales</span><span>${all.length}</span></div>`;
+    <div class="stat-row"><span class="stat-label">Operaciones</span><span>${ops.length}</span></div>
+    <div class="stat-row"><span class="stat-label">Días operados</span><span>${all.length}</span></div>`;
 }
 function calcMaxDD(eq){let pk=eq[0],dd=0;eq.forEach(v=>{if(v>pk)pk=v;const d=pk-v;if(d>dd)dd=d;});return parseFloat(dd.toFixed(2));}
 
 // ── SETTINGS ──
 function renderSettings(){
-  const imt5=Object.values(trades).filter(v=>v.fromImport).length;
-  document.getElementById('dataCount').innerHTML=`<span style="font-size:11px;color:var(--text2)">${Object.keys(trades).length} entradas · ${imt5} importadas</span>`;
+  const imp=ops.filter(o=>o.fromImport).length;
+  document.getElementById('dataCount').innerHTML=`<span style="font-size:11px;color:var(--text2)">${ops.length} operaciones en ${Object.keys(trades).length} días · ${imp} importadas</span>`;
   const bs=document.getElementById('balanceSection');
   if(currentBroker==='mt5'){
     bs.innerHTML=`<div style="font-size:11px;color:var(--text2);margin-bottom:10px;line-height:1.6">Balance inicial MT5 para calcular patrimonio acumulado.</div>
@@ -1266,16 +1467,26 @@ async function saveMT5Balance(){
   showToast("✓ BALANCE GUARDADO");
 }
 
-function exportJSON(){dl(new Blob([JSON.stringify(trades,null,2)],{type:'application/json'}),`journal_${currentBroker}.json`);showToast('✓ JSON');}
+function exportJSON(){
+  dl(new Blob([JSON.stringify({operations:ops,dayNotes},null,2)],{type:'application/json'}),`journal_${currentBroker}.json`);
+  showToast('✓ JSON');
+}
 function exportCSV(){
-  const h='date,pnl,trades,points,winrate,rr,symbol,setup,emotion,notes';
-  const rows=Object.entries(trades).sort(([a],[b])=>a.localeCompare(b)).map(([k,v])=>`${k},${v.pnl||''},${v.trades||''},${v.points||''},${v.winrate||''},${v.rr||''},"${v.symbol||''}","${v.setup||''}","${v.emotion||''}","${(v.notes||'').replace(/"/g,'""')}"`);
+  const h='date,symbol,direction,contracts,pnl,commission,swap,net_pnl,points,rr,setup,emotion,notes';
+  const q=s=>`"${String(s||'').replace(/"/g,'""')}"`;
+  const rows=ops.slice().sort((a,b)=>a.date.localeCompare(b.date)).map(o=>{
+    const n=dayNotes[o.date]||{};
+    return[o.date,q(o.symbol),o.direction||'',o.contracts??'',o.pnl,o.commission,o.swap,o.net,
+           o.points??'',o.rr??'',q(o.setup),q(n.emotion),q(n.notes)].join(',');
+  });
   dl(new Blob([[h,...rows].join('\n')],{type:'text/csv'}),`journal_${currentBroker}.csv`);showToast('✓ CSV');
 }
 async function clearBrokerData(){
-  if(!confirm(`¿Eliminar TODOS los datos de ${currentBroker.toUpperCase()}? Esto no se puede deshacer.`))return;
-  await sb.from('trades').delete().eq('user_id',currentUser.id).eq('broker',currentBroker);
-  trades={};renderCalendar();renderWeekly();if(currentBroker==='apex')renderApexRules();showToast('✕ DATOS ELIMINADOS');
+  if(!confirm(`¿Eliminar TODAS las operaciones de ${currentBroker.toUpperCase()}? Esto no se puede deshacer.`))return;
+  const a=await sb.from('operations').delete().eq('user_id',currentUser.id).eq('broker',currentBroker);
+  const b=await sb.from('day_notes').delete().eq('user_id',currentUser.id).eq('broker',currentBroker);
+  if(a.error||b.error){setSyncStatus('err');showToast('⚠ Error al eliminar');return;}
+  ops=[];dayNotes={};refrescarVistas();showToast('✕ DATOS ELIMINADOS');
 }
 function dl(blob,name){const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=name;a.click();URL.revokeObjectURL(a.href);}
 function showToast(msg){const t=document.getElementById('toast');t.textContent=msg;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),2500);}
