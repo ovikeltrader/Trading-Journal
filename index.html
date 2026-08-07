@@ -853,7 +853,8 @@ function calcApex(){
   const totProfit=winDays.reduce((s,[,v])=>s+parseFloat(v.pnl||0),0);
   const consNA=!consistencyAplica();
   const consPct=(!consNA&&totProfit>0)?(bestDay/totProfit)*100:0;
-  const consOk=consNA||consPct<apexCfg.cons;
+  // Se viola cuando el mejor día SUPERA el umbral: 50.0% exacto no es violación
+  const consOk=consNA||consPct<=apexCfg.cons;
   return{curEq,ddLvl,buf,bufPct,locked,todayPnL,dllUsed,dllPct,bestDay,totProfit,consPct,consOk,consNA,tot};
 }
 
@@ -925,7 +926,7 @@ function renderCalendar(){
     const key=`${curYear}-${String(curMonth+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
     const t=trades[key];const el=document.createElement('div');
     let cls='cal-cell';
-    if(t){const p=parseFloat(t.pnl||0);cls+=p>0?' has-win':' has-loss';cls+=currentBroker==='mt5'?' has-mt5':' has-apex';if(p>0&&allWinPnL>0&&currentBroker==='apex'&&consistencyAplica()&&(p/allWinPnL)*100>=apexCfg.cons)cls+=' cons-warn';}
+    if(t){const p=parseFloat(t.pnl||0);cls+=p>0?' has-win':' has-loss';cls+=currentBroker==='mt5'?' has-mt5':' has-apex';if(p>0&&allWinPnL>0&&currentBroker==='apex'&&consistencyAplica()&&(p/allWinPnL)*100>apexCfg.cons)cls+=' cons-warn';}
     if(today.getFullYear()===curYear&&today.getMonth()===curMonth&&today.getDate()===d)cls+=' today';
     el.className=cls;el.innerHTML=`<div class="cal-num">${d}</div>`;
     if(t){
@@ -1180,7 +1181,7 @@ function renderJournal(){
     const ib=v.fromImport?`<span class="badge ${currentBroker==='apex'?'badge-apex':'badge-mt5'}">${currentBroker==='mt5'?'MT5':'TRADOVATE'}</span>`:'';
     const sym=v.symbol||v.importSymbols;
     const symB=sym?`<span class="badge ${currentBroker==='apex'?'badge-apex':'badge-mt5'}">${sym}</span>`:'';
-    const cw=currentBroker==='apex'&&p>0&&allWin>0&&consistencyAplica()&&(p/allWin)*100>=apexCfg.cons?`<span class="badge badge-warn">⚠ CONS</span>`:'';
+    const cw=currentBroker==='apex'&&p>0&&allWin>0&&consistencyAplica()&&(p/allWin)*100>apexCfg.cons?`<span class="badge badge-warn">⚠ CONS</span>`:'';
     const imgs=v.images&&v.images.length?`<div class="je-imgs">${v.images.map(s=>`<img class="je-img" src="${s}" onclick="openLightbox('${s}')">`).join('')}</div>`:'';
     return`<div class="je">
       <div class="je-header">
