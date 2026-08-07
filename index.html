@@ -107,6 +107,7 @@ html,body{height:100%;background:var(--bg1);color:var(--text1);font-family:'DM S
 .st-safe{background:rgba(0,255,136,0.1);color:var(--green)}
 .st-warn{background:rgba(255,215,0,0.1);color:var(--gold)}
 .st-danger{background:rgba(255,68,102,0.1);color:var(--red)}
+.st-na{background:rgba(119,119,170,0.1);color:var(--text2)}
 
 /* ── METRICS ── */
 .metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:14px}
@@ -826,6 +827,14 @@ function renderMetrics(){
 }
 
 // ── APEX RULES ──
+// La consistency solo tiene sentido con la cuenta en profit: sin P&L neto positivo
+// el porcentaje no significa nada, y con un solo día ganador siempre daría 100%.
+function consistencyAplica(){
+  const pnls=Object.values(trades).map(v=>parseFloat(v.pnl||0));
+  const neto=pnls.reduce((s,p)=>s+p,0);
+  return neto>0&&pnls.filter(p=>p>0).length>1;
+}
+
 function calcApex(){
   const all=Object.entries(trades).sort(([a],[b])=>a.localeCompare(b));
   const tot=all.reduce((s,[,v])=>s+parseFloat(v.pnl||0),0);
@@ -842,16 +851,32 @@ function calcApex(){
   const winDays=all.filter(([,v])=>parseFloat(v.pnl||0)>0);
   const bestDay=winDays.length?Math.max(...winDays.map(([,v])=>parseFloat(v.pnl||0))):0;
   const totProfit=winDays.reduce((s,[,v])=>s+parseFloat(v.pnl||0),0);
-  const consPct=totProfit>0?(bestDay/totProfit)*100:0;
-  const consOk=consPct<apexCfg.cons||totProfit===0;
-  return{curEq,ddLvl,buf,bufPct,locked,todayPnL,dllUsed,dllPct,bestDay,totProfit,consPct,consOk,tot};
+  const consNA=!consistencyAplica();
+  const consPct=(!consNA&&totProfit>0)?(bestDay/totProfit)*100:0;
+  const consOk=consNA||consPct<apexCfg.cons;
+  return{curEq,ddLvl,buf,bufPct,locked,todayPnL,dllUsed,dllPct,bestDay,totProfit,consPct,consOk,consNA,tot};
 }
 
 function renderApexRules(){
   const r=calcApex();
   const ddD=r.bufPct<=15,ddW=r.bufPct>15&&r.bufPct<=40;
   const dllD=r.dllPct>=80,dllW=r.dllPct>=50&&r.dllPct<80;
-  const consD=!r.consOk,consW=r.consPct>r.apexCfg?.cons*0.7;
+  const consD=!r.consNA&&!r.consOk,consW=!r.consNA&&r.consPct>35;
+  const consCard=r.consNA?`
+  <div class="rule-card">
+    <span class="rule-status st-na">N/A</span>
+    <div class="rule-label">CONSISTENCY (${apexCfg.cons}%)</div>
+    <div class="rule-value" style="color:var(--text2)">N/A</div>
+    <div class="rule-sub">— sin ganancias acumuladas</div>
+    <div class="rule-bar"><div class="rule-fill" style="width:0%"></div></div>
+  </div>`:`
+  <div class="rule-card ${consD?'danger':consW?'warning':'safe'}">
+    <span class="rule-status ${consD?'st-danger':consW?'st-warn':'st-safe'}">${consD?'VIOLACIÓN':consW?'CUIDADO':'OK'}</span>
+    <div class="rule-label">CONSISTENCY (${apexCfg.cons}%)</div>
+    <div class="rule-value ${consD?'red':consW?'gold':'green'}">${r.consPct.toFixed(1)}%</div>
+    <div class="rule-sub">Mejor día: ${fmt(r.bestDay)} de ${fmt(r.totProfit)}</div>
+    <div class="rule-bar"><div class="rule-fill" style="width:${Math.min(r.consPct/apexCfg.cons*100,100).toFixed(0)}%;background:${consD?'var(--red)':consW?'var(--gold)':'var(--green)'}"></div></div>
+  </div>`;
   document.getElementById('apexRules').innerHTML=`
   <div class="rule-card ${ddD?'danger':ddW?'warning':'safe'}">
     <span class="rule-status ${ddD?'st-danger':ddW?'st-warn':'st-safe'}">${ddD?'PELIGRO':ddW?'CUIDADO':'SEGURO'}</span>
@@ -867,13 +892,7 @@ function renderApexRules(){
     <div class="rule-sub">Límite: -${fmt(apexCfg.dll)} · Usado: ${r.dllPct.toFixed(0)}%</div>
     <div class="rule-bar"><div class="rule-fill" style="width:${Math.min(r.dllPct,100).toFixed(0)}%;background:${dllD?'var(--red)':dllW?'var(--gold)':'var(--green)'}"></div></div>
   </div>
-  <div class="rule-card ${consD?'danger':r.consPct>35?'warning':'safe'}">
-    <span class="rule-status ${consD?'st-danger':r.consPct>35?'st-warn':'st-safe'}">${consD?'VIOLACIÓN':r.consPct>35?'CUIDADO':'OK'}</span>
-    <div class="rule-label">CONSISTENCY (50%)</div>
-    <div class="rule-value ${consD?'red':r.consPct>35?'gold':'green'}">${r.consPct.toFixed(1)}%</div>
-    <div class="rule-sub">Mejor día: ${fmt(r.bestDay)} de ${fmt(r.totProfit)}</div>
-    <div class="rule-bar"><div class="rule-fill" style="width:${Math.min(r.consPct/apexCfg.cons*100,100).toFixed(0)}%;background:${consD?'var(--red)':r.consPct>35?'var(--gold)':'var(--green)'}"></div></div>
-  </div>`;
+  ${consCard}`;
 }
 
 function renderApexDetail(){
@@ -886,7 +905,9 @@ function renderApexDetail(){
     <div class="stat-row"><span class="stat-label">Trailing DD level</span><span>${fmt(r.ddLvl)}${r.locked?' 🔒':''}</span></div>
     <div class="stat-row"><span class="stat-label">Buffer disponible</span><span class="${r.bufPct<=15?'red':r.bufPct<=40?'gold':'green'}">${fmt(r.buf)}</span></div>
     <div class="stat-row"><span class="stat-label">Daily loss limit</span><span>-${fmt(apexCfg.dll)}</span></div>
-    <div class="stat-row"><span class="stat-label">Consistency</span><span class="${!r.consOk?'red':r.consPct>35?'gold':'green'}">${r.consPct.toFixed(1)}% ${!r.consOk?'⚠ VIOLADA':'✓ OK'}</span></div>`;
+    <div class="stat-row"><span class="stat-label">Consistency</span>${r.consNA
+      ?`<span style="color:var(--text2)">N/A — sin ganancias acumuladas</span>`
+      :`<span class="${!r.consOk?'red':r.consPct>35?'gold':'green'}">${r.consPct.toFixed(1)}% ${!r.consOk?'⚠ VIOLADA':'✓ OK'}</span>`}</div>`;
 }
 
 // ── CALENDAR ──
@@ -904,7 +925,7 @@ function renderCalendar(){
     const key=`${curYear}-${String(curMonth+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
     const t=trades[key];const el=document.createElement('div');
     let cls='cal-cell';
-    if(t){const p=parseFloat(t.pnl||0);cls+=p>0?' has-win':' has-loss';cls+=currentBroker==='mt5'?' has-mt5':' has-apex';if(p>0&&allWinPnL>0&&currentBroker==='apex'&&(p/allWinPnL)*100>=apexCfg.cons)cls+=' cons-warn';}
+    if(t){const p=parseFloat(t.pnl||0);cls+=p>0?' has-win':' has-loss';cls+=currentBroker==='mt5'?' has-mt5':' has-apex';if(p>0&&allWinPnL>0&&currentBroker==='apex'&&consistencyAplica()&&(p/allWinPnL)*100>=apexCfg.cons)cls+=' cons-warn';}
     if(today.getFullYear()===curYear&&today.getMonth()===curMonth&&today.getDate()===d)cls+=' today';
     el.className=cls;el.innerHTML=`<div class="cal-num">${d}</div>`;
     if(t){
@@ -1159,7 +1180,7 @@ function renderJournal(){
     const ib=v.fromImport?`<span class="badge ${currentBroker==='apex'?'badge-apex':'badge-mt5'}">${currentBroker==='mt5'?'MT5':'TRADOVATE'}</span>`:'';
     const sym=v.symbol||v.importSymbols;
     const symB=sym?`<span class="badge ${currentBroker==='apex'?'badge-apex':'badge-mt5'}">${sym}</span>`:'';
-    const cw=currentBroker==='apex'&&p>0&&allWin>0&&(p/allWin)*100>=apexCfg.cons?`<span class="badge badge-warn">⚠ CONS</span>`:'';
+    const cw=currentBroker==='apex'&&p>0&&allWin>0&&consistencyAplica()&&(p/allWin)*100>=apexCfg.cons?`<span class="badge badge-warn">⚠ CONS</span>`:'';
     const imgs=v.images&&v.images.length?`<div class="je-imgs">${v.images.map(s=>`<img class="je-img" src="${s}" onclick="openLightbox('${s}')">`).join('')}</div>`:'';
     return`<div class="je">
       <div class="je-header">
