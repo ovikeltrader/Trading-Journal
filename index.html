@@ -835,6 +835,15 @@ function consistencyAplica(){
   return neto>0&&pnls.filter(p=>p>0).length>1;
 }
 
+// Con un decimal, 50.001% se muestra "50.0%" y parece contradecir el VIOLACIÓN.
+// Cerca del umbral usamos 2 decimales, y si ni así se despega, marcamos el sentido.
+function fmtConsPct(pct,umbral){
+  if(pct===umbral||Math.abs(pct-umbral)>=0.05)return pct.toFixed(1)+'%';
+  const dos=pct.toFixed(2);
+  if(parseFloat(dos)!==umbral)return dos+'%';
+  return (pct>umbral?'>':'<')+umbral.toFixed(2)+'%';
+}
+
 function calcApex(){
   const all=Object.entries(trades).sort(([a],[b])=>a.localeCompare(b));
   const tot=all.reduce((s,[,v])=>s+parseFloat(v.pnl||0),0);
@@ -874,7 +883,7 @@ function renderApexRules(){
   <div class="rule-card ${consD?'danger':consW?'warning':'safe'}">
     <span class="rule-status ${consD?'st-danger':consW?'st-warn':'st-safe'}">${consD?'VIOLACIÓN':consW?'CUIDADO':'OK'}</span>
     <div class="rule-label">CONSISTENCY (${apexCfg.cons}%)</div>
-    <div class="rule-value ${consD?'red':consW?'gold':'green'}">${r.consPct.toFixed(1)}%</div>
+    <div class="rule-value ${consD?'red':consW?'gold':'green'}">${fmtConsPct(r.consPct,apexCfg.cons)}</div>
     <div class="rule-sub">Mejor día: ${fmt(r.bestDay)} de ${fmt(r.totProfit)}</div>
     <div class="rule-bar"><div class="rule-fill" style="width:${Math.min(r.consPct/apexCfg.cons*100,100).toFixed(0)}%;background:${consD?'var(--red)':consW?'var(--gold)':'var(--green)'}"></div></div>
   </div>`;
@@ -908,7 +917,7 @@ function renderApexDetail(){
     <div class="stat-row"><span class="stat-label">Daily loss limit</span><span>-${fmt(apexCfg.dll)}</span></div>
     <div class="stat-row"><span class="stat-label">Consistency</span>${r.consNA
       ?`<span style="color:var(--text2)">N/A — sin ganancias acumuladas</span>`
-      :`<span class="${!r.consOk?'red':r.consPct>35?'gold':'green'}">${r.consPct.toFixed(1)}% ${!r.consOk?'⚠ VIOLADA':'✓ OK'}</span>`}</div>`;
+      :`<span class="${!r.consOk?'red':r.consPct>35?'gold':'green'}">${fmtConsPct(r.consPct,apexCfg.cons)} ${!r.consOk?'⚠ VIOLADA':'✓ OK'}</span>`}</div>`;
 }
 
 // ── CALENDAR ──
