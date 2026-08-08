@@ -929,7 +929,7 @@ function renderMetrics(){
   document.getElementById('calTitle').textContent=`${mn[curMonth]} ${curYear}`;
   document.getElementById('monthSel').value=curMonth;document.getElementById('yearSel').value=curYear;
   const hm=document.getElementById('hMonth');if(hm)hm.textContent=`${mn[curMonth]} ${curYear}`;
-  const pe=document.getElementById('mPnl');pe.textContent=(pnl>=0?'+':'')+fmt(pnl);pe.className='metric-value '+(pnl>=0?'green':'red');
+  const pe=document.getElementById('mPnl');pe.textContent=fmtSigned(pnl);pe.className='metric-value '+(pnl>=0?'green':'red');
   document.getElementById('mPnlSub').textContent=`${mt.length} días · ${mo.length} ${mo.length===1?'operación':'operaciones'}`;
   document.getElementById('mWr').textContent=wr+'%';document.getElementById('mWrBar').style.width=wr+'%';
   document.getElementById('mRr').textContent=avgRr;document.getElementById('mTrades').textContent=tt;
@@ -1008,7 +1008,7 @@ function renderApexRules(){
   <div class="rule-card ${dllD?'danger':dllW?'warning':'safe'}">
     <span class="rule-status ${dllD?'st-danger':dllW?'st-warn':'st-safe'}">${dllD?'PELIGRO':dllW?'CUIDADO':'OK'}</span>
     <div class="rule-label">DAILY LOSS LIMIT (HOY)</div>
-    <div class="rule-value ${r.todayPnL>=0?'green':dllD?'red':'gold'}">${r.todayPnL>=0?'+':''}${fmt(r.todayPnL)}</div>
+    <div class="rule-value ${r.todayPnL>=0?'green':dllD?'red':'gold'}">${fmtSigned(r.todayPnL)}</div>
     <div class="rule-sub">Límite: -${fmt(apexCfg.dll)} · Usado: ${r.dllPct.toFixed(0)}%</div>
     <div class="rule-bar"><div class="rule-fill" style="width:${Math.min(r.dllPct,100).toFixed(0)}%;background:${dllD?'var(--red)':dllW?'var(--gold)':'var(--green)'}"></div></div>
   </div>
@@ -1021,7 +1021,7 @@ function renderApexDetail(){
   document.getElementById('apexDetailPanel').innerHTML=`
     <div class="stat-row"><span class="stat-label">Equity actual</span><span class="${r.curEq>=apexCfg.balance?'purple':'red'}" style="font-weight:700">${fmt(r.curEq)}</span></div>
     <div class="stat-row"><span class="stat-label">Objetivo (payout)</span><span class="purple">${fmt(apexCfg.balance+apexCfg.dd)}</span></div>
-    <div class="stat-row"><span class="stat-label">P&L acumulado</span><span class="${r.tot>=0?'green':'red'}">${r.tot>=0?'+':''}${fmt(r.tot)}</span></div>
+    <div class="stat-row"><span class="stat-label">P&L acumulado</span><span class="${r.tot>=0?'green':'red'}">${fmtSigned(r.tot)}</span></div>
     <div class="stat-row"><span class="stat-label">Trailing DD level</span><span>${fmt(r.ddLvl)}${r.locked?' 🔒':''}</span></div>
     <div class="stat-row"><span class="stat-label">Buffer disponible</span><span class="${r.bufPct<=15?'red':r.bufPct<=40?'gold':'green'}">${fmt(r.buf)}</span></div>
     <div class="stat-row"><span class="stat-label">Daily loss limit</span><span>-${fmt(apexCfg.dll)}</span></div>
@@ -1082,7 +1082,7 @@ function renderWeekly(){
     let wp=0,wt=0,wd=0,ww=0;
     w.days.forEach(d=>{const k=`${curYear}-${String(curMonth+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;const t=trades[k];if(!t)return;wp+=parseFloat(t.pnl||0);wt+=parseInt(t.trades||0);wd++;if(parseFloat(t.pnl||0)>0)ww++;});
     const c=document.createElement('div');c.className=`week-card${wd===0?'':wp>=0?' ww':' lw'}`;
-    c.innerHTML=`<div class="week-label">SEM ${i+1} · ${String(w.start).padStart(2,'0')}–${String(w.end).padStart(2,'0')}</div><div class="week-pnl ${wp>=0?'green':'red'}">${wd?(wp>=0?'+':'')+fmt(wp):'—'}</div><div class="week-stats">${wd?`${wd} días · ${wt} trades · ${Math.round(ww/wd*100)}% WR`:'Sin datos'}</div>`;
+    c.innerHTML=`<div class="week-label">SEM ${i+1} · ${String(w.start).padStart(2,'0')}–${String(w.end).padStart(2,'0')}</div><div class="week-pnl ${wp>=0?'green':'red'}">${wd?fmtSigned(wp):'—'}</div><div class="week-stats">${wd?`${wd} días · ${wt} trades · ${Math.round(ww/wd*100)}% WR`:'Sin datos'}</div>`;
     g.appendChild(c);
   });
 }
@@ -1217,10 +1217,10 @@ function showImportPreview(lista,source){
   <div class="preview-wrap">
     <table class="preview-table">
       <thead><tr><th>FECHA</th><th>SÍMBOLO</th><th>TRADES</th><th>P&L</th><th>ESTADO</th></tr></thead>
-      <tbody>${days.map(t=>`<tr><td>${t.date}</td><td style="color:var(--text2);font-size:10px">${t.symbols||'—'}</td><td style="color:var(--text2)">${t.count}</td><td class="${t.profit>=0?'green':'red'}">${t.profit>=0?'+':''}${fmt(t.profit)}</td><td>${trades[t.date]?`<span style="color:var(--gold)">MERGE</span>`:`<span class="green">NUEVO</span>`}</td></tr>`).join('')}</tbody>
+      <tbody>${days.map(t=>`<tr><td>${t.date}</td><td style="color:var(--text2);font-size:10px">${t.symbols||'—'}</td><td style="color:var(--text2)">${t.count}</td><td class="${t.profit>=0?'green':'red'}">${fmtSigned(t.profit)}</td><td>${trades[t.date]?`<span style="color:var(--gold)">MERGE</span>`:`<span class="green">NUEVO</span>`}</td></tr>`).join('')}</tbody>
     </table>
   </div>
-  <div style="font-size:10px;color:var(--text2);margin-bottom:10px;font-family:'Space Mono',monospace"><strong style="color:var(--text1)">${days.length}</strong> días · <span class="green">${newD} nuevos</span> · <span style="color:var(--gold)">${days.length-newD} merge</span> · Total: <span class="${total>=0?'green':'red'}">${total>=0?'+':''}${fmt(total)}</span></div>
+  <div style="font-size:10px;color:var(--text2);margin-bottom:10px;font-family:'Space Mono',monospace"><strong style="color:var(--text1)">${days.length}</strong> días · <span class="green">${newD} nuevos</span> · <span style="color:var(--gold)">${days.length-newD} merge</span> · Total: <span class="${total>=0?'green':'red'}">${fmtSigned(total)}</span></div>
   <div style="display:flex;gap:8px">
     <button class="btn ${currentBroker==='apex'?'btn-apex':'btn-mt5'}" onclick="confirmImport()">✓ CONFIRMAR</button>
     <button class="btn" onclick="cancelImport()">✕ CANCELAR</button>
@@ -1271,7 +1271,7 @@ function renderImportHistory(){
   const hist=JSON.parse(localStorage.getItem(impHistKey())||'[]');
   const el=document.getElementById('importHistory');if(!el)return;
   if(!hist.length){el.innerHTML='<div class="empty-state" style="padding:14px">Sin importaciones previas</div>';return;}
-  el.innerHTML=hist.map(h=>`<div class="stat-row"><span class="stat-label">${h.date}</span><span><span class="badge ${currentBroker==='apex'?'badge-apex':'badge-mt5'}">${h.days} días</span> &nbsp;<span class="${parseFloat(h.total)>=0?'green':'red'}">${parseFloat(h.total)>=0?'+':''}${fmt(parseFloat(h.total))}</span></span></div>`).join('');
+  el.innerHTML=hist.map(h=>`<div class="stat-row"><span class="stat-label">${h.date}</span><span><span class="badge ${currentBroker==='apex'?'badge-apex':'badge-mt5'}">${h.days} días</span> &nbsp;<span class="${parseFloat(h.total)>=0?'green':'red'}">${fmtSigned(parseFloat(h.total))}</span></span></div>`).join('');
 }
 
 // ── MODAL OPERACIÓN ──
@@ -1316,7 +1316,7 @@ function openDay(key){
   const d=trades[key];
   document.getElementById('dayTitle').textContent='DÍA '+key;
   document.getElementById('daySummary').innerHTML=lista.length
-    ?`<span class="${d.pnl>=0?'green':'red'}" style="font-weight:700">${d.pnl>=0?'+':''}${fmt(d.pnl)}</span> · ${lista.length} ${lista.length===1?'operación':'operaciones'} · ${d.winrate}% WR`
+    ?`<span class="${d.pnl>=0?'green':'red'}" style="font-weight:700">${fmtSigned(d.pnl)}</span> · ${lista.length} ${lista.length===1?'operación':'operaciones'} · ${d.winrate}% WR`
     :'Sin operaciones cargadas en esta fecha.';
   document.getElementById('dayOpsList').innerHTML=lista.map(o=>{
     const dir=o.direction?`<span class="badge">${o.direction==='long'?'LONG':'SHORT'}</span>`:'';
@@ -1326,7 +1326,7 @@ function openDay(key){
     return`<div class="stat-row" style="align-items:center">
       <span>${sym}${dir}${ct}${lg}</span>
       <span style="display:flex;align-items:center;gap:8px">
-        <span class="${o.net>=0?'green':'red'}" style="font-weight:700">${o.net>=0?'+':''}${fmt(o.net)}</span>
+        <span class="${o.net>=0?'green':'red'}" style="font-weight:700">${fmtSigned(o.net)}</span>
         <button class="btn btn-sm" onclick="openEditOp('${o.id}')">EDITAR</button>
       </span></div>`;
   }).join('')||'';
@@ -1419,14 +1419,14 @@ function renderJournal(){
       return`<div class="stat-row" style="align-items:center">
         <span>${sym}${dir}${ct}${st}${rr}${ib}</span>
         <span style="display:flex;align-items:center;gap:8px">
-          <span class="${o.net>=0?'green':'red'}" style="font-weight:700">${o.net>=0?'+':''}${fmt(o.net)}</span>
+          <span class="${o.net>=0?'green':'red'}" style="font-weight:700">${fmtSigned(o.net)}</span>
           <button class="btn btn-sm" onclick="openEditOp('${o.id}')">EDITAR</button>
         </span></div>`;
     }).join('');
     return`<div class="je">
       <div class="je-header">
         <div><div class="je-date">${k}</div><div style="margin-top:4px">${eb}${cw}</div></div>
-        <div><div class="je-pnl ${p>=0?'green':'red'}">${p>=0?'+':''}${fmt(p)}</div>${v.trades?`<div style="font-size:10px;color:var(--text2);text-align:right">${v.trades} ${v.trades===1?'operación':'operaciones'} · ${v.winrate}% WR</div>`:''}</div>
+        <div><div class="je-pnl ${p>=0?'green':'red'}">${fmtSigned(p)}</div>${v.trades?`<div style="font-size:10px;color:var(--text2);text-align:right">${v.trades} ${v.trades===1?'operación':'operaciones'} · ${v.winrate}% WR</div>`:''}</div>
       </div>
       ${filas}
       ${v.notes?`<div class="je-notes">${v.notes}</div>`:''}${imgs}
@@ -1464,11 +1464,11 @@ function renderAnalytics(){
   const curEq=currentBroker==='apex'?apexCfg.balance+tot:initialBalanceMT5+tot;
   document.getElementById('statsDetail').innerHTML=`
     <div class="stat-row"><span class="stat-label">Equity actual</span><span class="${currentBroker==='apex'?'purple':'orange'}" style="font-weight:700">${fmt(curEq)}</span></div>
-    <div class="stat-row"><span class="stat-label">Total P&L</span><span class="${tot>=0?'green':'red'}">${tot>=0?'+':''}${fmt(tot)}</span></div>
-    <div class="stat-row"><span class="stat-label">Mejor día</span><span class="${best>=0?'green':'red'}">${best>=0?'+':'-'}${fmt(best)}</span></div>
-    <div class="stat-row"><span class="stat-label">Peor día</span><span class="${worst>=0?'green':'red'}">${worst>=0?'+':'-'}${fmt(worst)}</span></div>
-    <div class="stat-row"><span class="stat-label">Promedio/día</span><span class="${avg>=0?'green':'red'}">${avg>=0?'+':''}${fmt(avg)}</span></div>
-    <div class="stat-row"><span class="stat-label">Promedio/operación</span><span class="${avgOp>=0?'green':'red'}">${avgOp>=0?'+':''}${fmt(avgOp)}</span></div>
+    <div class="stat-row"><span class="stat-label">Total P&L</span><span class="${tot>=0?'green':'red'}">${fmtSigned(tot)}</span></div>
+    <div class="stat-row"><span class="stat-label">Mejor día</span><span class="${best>=0?'green':'red'}">${fmtSigned(best)}</span></div>
+    <div class="stat-row"><span class="stat-label">Peor día</span><span class="${worst>=0?'green':'red'}">${fmtSigned(worst)}</span></div>
+    <div class="stat-row"><span class="stat-label">Promedio/día</span><span class="${avg>=0?'green':'red'}">${fmtSigned(avg)}</span></div>
+    <div class="stat-row"><span class="stat-label">Promedio/operación</span><span class="${avgOp>=0?'green':'red'}">${fmtSigned(avgOp)}</span></div>
     <div class="stat-row"><span class="stat-label">Win Rate (por operación)</span><span>${ops.length?Math.round(wins/ops.length*100):0}%</span></div>
     <div class="stat-row"><span class="stat-label">Win Rate (por día)</span><span style="color:var(--text2)">${Math.round(winsDias/all.length*100)}%</span></div>
     <div class="stat-row"><span class="stat-label">Avg R:R</span><span class="gold">${arr}</span></div>
@@ -1542,7 +1542,7 @@ function renderEquity(){
   ev.textContent='$'+eq.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
   ev.style.color=eq>=getInitialBalance()?'var(--gold)':'var(--red)';
   const diff=eq-getInitialBalance(),pct=getInitialBalance()>0?((diff/getInitialBalance())*100).toFixed(1):0;
-  es.innerHTML='Balance: $'+getInitialBalance().toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})+' · P&L: <span style="color:'+(diff>=0?'var(--green)':'var(--red)')+'">'+(diff>=0?'+':'')+'$'+Math.abs(diff).toFixed(2)+' ('+(diff>=0?'+':'')+pct+'%)</span>';
+  es.innerHTML='Balance: $'+getInitialBalance().toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})+' · P&L: <span style="color:'+(diff>=0?'var(--green)':'var(--red)')+'">'+fmtSigned(diff)+' ('+(diff>=0?'+':'')+pct+'%)</span>';
 }
 function openEquityModal(){
   const inp=document.getElementById('eqInput');
@@ -1557,7 +1557,7 @@ function updateEqPreview(){
   const tot=calcTotalPnL(),eq=val+tot;
   prev.style.display='block';
   document.getElementById('ep1').textContent='$'+val.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
-  const ep2=document.getElementById('ep2');ep2.textContent=(tot>=0?'+':'')+'$'+tot.toFixed(2);ep2.style.color=tot>=0?'var(--green)':'var(--red)';
+  const ep2=document.getElementById('ep2');ep2.textContent=fmtSigned(tot);ep2.style.color=tot>=0?'var(--green)':'var(--red)';
   document.getElementById('ep3').textContent='$'+eq.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
 }
 async function saveEquity(){
