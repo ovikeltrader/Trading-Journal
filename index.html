@@ -110,8 +110,9 @@ html,body{height:100%;background:var(--bg1);color:var(--text1);font-family:'DM S
 .st-na{background:rgba(119,119,170,0.1);color:var(--text2)}
 
 /* ── METRICS ── */
-.metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:14px}
-.metric{background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:14px}
+.metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:14px}
+.metric{background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:14px;min-width:0;overflow:hidden}
+.metric-value{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .metric-label{font-size:9px;letter-spacing:2px;color:var(--text2);margin-bottom:6px;font-family:'Space Mono',monospace}
 .metric-value{font-size:24px;font-weight:700;letter-spacing:-1px;font-family:'Space Mono',monospace}
 .metric-sub{font-size:10px;color:var(--text2);margin-top:3px}
@@ -126,10 +127,12 @@ html,body{height:100%;background:var(--bg1);color:var(--text1);font-family:'DM S
 .panel{display:none}.panel.active{display:block}
 
 /* ── CALENDAR ── */
-.cal-header-row{display:grid;grid-template-columns:repeat(7,1fr);gap:5px;margin-bottom:5px}
+/* minmax(0,1fr) y no 1fr: 1fr equivale a minmax(auto,1fr), y ese minimo auto deja
+   que un P&L largo estire su columna y desalinee la grilla del encabezado */
+.cal-header-row{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:5px;margin-bottom:5px}
 .cal-day-name{text-align:center;font-size:9px;letter-spacing:2px;color:var(--text2);padding:5px 0;font-family:'Space Mono',monospace}
-.cal-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:5px}
-.cal-cell{background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:8px;min-height:70px;cursor:pointer;transition:all 0.15s}
+.cal-grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:5px}
+.cal-cell{background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:8px;min-height:70px;cursor:pointer;transition:all 0.15s;min-width:0;overflow:hidden}
 .cal-cell:hover{border-color:var(--green);background:var(--bg3)}
 .cal-cell.empty{cursor:default;background:transparent;border-color:transparent}
 .cal-cell.empty:hover{border-color:transparent;background:transparent}
@@ -142,6 +145,25 @@ html,body{height:100%;background:var(--bg1);color:var(--text1);font-family:'DM S
 .cal-num{font-size:10px;color:var(--text2);margin-bottom:3px;font-family:'Space Mono',monospace}
 .cal-pnl{font-size:13px;font-weight:700;font-family:'Space Mono',monospace}
 .cal-meta{font-size:9px;color:var(--text2);margin-top:2px}
+/* el contenido se recorta dentro de la celda, nunca empuja la columna */
+.cal-num,.cal-pnl,.cal-meta{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+@media (max-width:480px){
+  .main{padding:12px 10px}
+  /* 4 tarjetas de métricas no entran: a 360px quedan en ~80px con número de 24px */
+  .metrics{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+  .metric{padding:10px}
+  .metric-value{font-size:18px;letter-spacing:0}
+  .weeks-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:5px}
+  .cal-grid,.cal-header-row{gap:3px}
+  .cal-day-name{font-size:8px;letter-spacing:1px;padding:3px 0}
+  .cal-cell{padding:4px;min-height:54px;border-radius:6px}
+  .cal-cell.has-mt5{box-shadow:inset 2px 0 0 var(--orange)}
+  .cal-cell.has-apex{box-shadow:inset 2px 0 0 var(--purple)}
+  .cal-num{font-size:9px;margin-bottom:1px}
+  .cal-pnl{font-size:10px}
+  .cal-meta{font-size:8px;margin-top:1px}
+}
 
 .month-nav{display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap}
 .month-title{font-size:14px;font-weight:700;letter-spacing:3px;flex:1;font-family:'Space Mono',monospace}
@@ -1013,8 +1035,19 @@ function populateYearSel(){
   const s=document.getElementById('yearSel');s.innerHTML='';
   for(let y=2023;y<=2027;y++){const o=document.createElement('option');o.value=y;o.textContent=y;if(y===curYear)o.selected=true;s.appendChild(o);}
 }
+// En pantallas angostas la celda mide ~42px: el formato largo no entra y se recortaría
+const mqAngosto=window.matchMedia('(max-width:480px)');
+function fmtCal(n){
+  const s=n>=0?'+':'-',a=Math.abs(n);
+  if(a>=1000)return s+'$'+(a/1000).toFixed(1)+'k';
+  if(a>=10)return s+'$'+Math.round(a);
+  return s+'$'+a.toFixed(1);
+}
+mqAngosto.addEventListener('change',()=>{if(currentUser&&dataLoaded)renderCalendar();});
+
 function renderCalendar(){
   renderMetrics();
+  const angosto=mqAngosto.matches;
   const g=document.getElementById('calGrid');g.innerHTML='';
   const first=new Date(curYear,curMonth,1).getDay(),last=new Date(curYear,curMonth+1,0).getDate(),today=new Date();
   const allWinPnL=Object.values(trades).filter(v=>parseFloat(v.pnl||0)>0).reduce((s,v)=>s+parseFloat(v.pnl||0),0);
@@ -1028,8 +1061,8 @@ function renderCalendar(){
     el.className=cls;el.innerHTML=`<div class="cal-num">${d}</div>`;
     if(t){
       const p=parseFloat(t.pnl||0);
-      el.innerHTML+=`<div class="cal-pnl ${p>=0?'green':'red'}">${p>=0?'+':''}${fmt(p)}</div>`;
-      if(t.trades)el.innerHTML+=`<div class="cal-meta">${t.trades} ${t.trades===1?'op':'ops'}${t.symbol?' · '+t.symbol:''}</div>`;
+      el.innerHTML+=`<div class="cal-pnl ${p>=0?'green':'red'}">${angosto?fmtCal(p):(p>=0?'+':'')+fmt(p)}</div>`;
+      if(t.trades)el.innerHTML+=`<div class="cal-meta">${t.trades} ${t.trades===1?'op':'ops'}${!angosto&&t.symbol?' · '+t.symbol:''}</div>`;
       if(t.images&&t.images.length)el.innerHTML+=`<div style="font-size:8px;color:var(--blue)">📷${t.images.length}</div>`;
     }
     // el día abre la lista de operaciones; si está vacío, carga una nueva directo
