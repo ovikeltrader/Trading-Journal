@@ -1035,6 +1035,10 @@ function populateYearSel(){
   const s=document.getElementById('yearSel');s.innerHTML='';
   for(let y=2023;y<=2027;y++){const o=document.createElement('option');o.value=y;o.textContent=y;if(y===curYear)o.selected=true;s.appendChild(o);}
 }
+// fmt() usa valor absoluto, así que el signo va aparte. Con el menos explícito la
+// celda se lee igual en el celular que en la PC.
+const fmtSigned=n=>(n>=0?'+':'-')+fmt(n);
+
 // En pantallas angostas la celda mide ~42px: el formato largo no entra y se recortaría
 const mqAngosto=window.matchMedia('(max-width:480px)');
 function fmtCal(n){
@@ -1061,7 +1065,7 @@ function renderCalendar(){
     el.className=cls;el.innerHTML=`<div class="cal-num">${d}</div>`;
     if(t){
       const p=parseFloat(t.pnl||0);
-      el.innerHTML+=`<div class="cal-pnl ${p>=0?'green':'red'}">${angosto?fmtCal(p):(p>=0?'+':'')+fmt(p)}</div>`;
+      el.innerHTML+=`<div class="cal-pnl ${p>=0?'green':'red'}">${angosto?fmtCal(p):fmtSigned(p)}</div>`;
       if(t.trades)el.innerHTML+=`<div class="cal-meta">${t.trades} ${t.trades===1?'op':'ops'}${!angosto&&t.symbol?' · '+t.symbol:''}</div>`;
       if(t.images&&t.images.length)el.innerHTML+=`<div style="font-size:8px;color:var(--blue)">📷${t.images.length}</div>`;
     }
